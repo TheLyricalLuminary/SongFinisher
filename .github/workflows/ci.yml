@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  package-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run package test suites
+        run: |
+          set -euo pipefail
+          for p in Domain MelodyKit LyricEngine PersistenceKit; do
+            echo "── swift test: $p ──"
+            swift test --package-path "Packages/$p"
+          done

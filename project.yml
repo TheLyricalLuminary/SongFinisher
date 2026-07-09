@@ -1,0 +1,65 @@
+name: SongFinisher
+options:
+  bundleIdPrefix: com.songfinisher
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  Domain:
+    path: Packages/Domain
+  MelodyKit:
+    path: Packages/MelodyKit
+  LyricEngine:
+    path: Packages/LyricEngine
+  PersistenceKit:
+    path: Packages/PersistenceKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  SongFinisher:
+    type: application
+    platform: iOS
+    sources:
+      - SongFinisher
+      - Features
+    dependencies:
+      - package: Domain
+      - package: MelodyKit
+      - package: LyricEngine
+      - package: PersistenceKit
+    info:
+      path: SongFinisher/Info.plist
+      properties:
+        NSMicrophoneUsageDescription: >-
+          Song Finisher listens to your melody on this device to suggest lyrics
+          that fit it. Audio is analyzed locally and never stored.
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.songfinisher.app
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: false
+
+  SongFinisherTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - SongFinisherTests
+    dependencies:
+      - target: SongFinisher
+
+schemes:
+  SongFinisher:
+    build:
+      targets:
+        SongFinisher: all
+    test:
+      targets:
+        - SongFinisherTests
