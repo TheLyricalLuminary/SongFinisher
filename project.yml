@@ -52,6 +52,9 @@ targets:
     platform: iOS
     sources:
       - SongFinisherTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
     dependencies:
       - target: SongFinisher
 
