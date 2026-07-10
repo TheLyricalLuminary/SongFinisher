@@ -168,16 +168,24 @@ final class YINPitchDetector {
     }
 }
 
-/// Rolling noise-floor estimate: an exponentially-decaying minimum statistic of frame RMS.
+/// Rolling noise-floor estimate. Adapts downward instantly and upward only while the
+/// frame is plausibly noise (within 6× the current floor). Frames far above the floor
+/// are signal and must NOT drag it up — an unconditional upward drift eats sustained
+/// notes (measured: a 2 s tone lost voicing at 1.78 s as the floor climbed into the
+/// rms > 4×floor gate). A vestigial drift remains so a genuine noise-step (fan turns
+/// on) eventually re-converges; its time constant (~minutes) is far beyond the 12 s
+/// phrase cap, so no singable note can be gated out.
 struct NoiseFloorTracker {
     private var floor: Float = 0.0005
 
     mutating func update(rms: Float) -> Float {
         if rms < floor {
-            floor = rms                     // fast attack downward
+            floor = rms                        // fast attack downward
+        } else if rms < floor * 6 {
+            floor += (rms - floor) * 0.02      // within the noise band: adapt normally
         } else {
-            floor += (rms - floor) * 0.002  // slow drift upward
+            floor += (rms - floor) * 0.0001    // clear signal: vestigial drift only
         }
-        return max(floor, 0.0002)           // never zero: silence must not gate open
+        return max(floor, 0.0002)              // never zero: silence must not gate open
     }
 }

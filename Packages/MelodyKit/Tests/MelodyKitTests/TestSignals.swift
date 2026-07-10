@@ -40,6 +40,34 @@ enum TestSignals {
         440.0 * pow(2.0, (midi - 69.0) / 12.0)
     }
 
+    /// A tone with sinusoidal vibrato: rate in Hz, extent in cents (± around center).
+    /// Phase-continuous so the vibrato itself introduces no spectral-flux attacks.
+    static func vibratoTone(
+        midi: Double,
+        duration: TimeInterval,
+        rateHz: Double,
+        extentCents: Double,
+        amplitude: Float = 0.5
+    ) -> [Float] {
+        let count = Int(duration * sampleRate)
+        let center = frequency(midi: midi)
+        let attack = min(count / 8, 160)
+        let release = min(count / 8, 160)
+        var out = [Float](repeating: 0, count: count)
+        var phase = 0.0
+        for i in 0..<count {
+            let t = Double(i) / sampleRate
+            let cents = extentCents * sin(2.0 * .pi * rateHz * t)
+            let f = center * pow(2.0, cents / 1200.0)
+            phase += 2.0 * .pi * f / sampleRate
+            var env: Float = 1
+            if i < attack { env = Float(i) / Float(max(1, attack)) }
+            if i >= count - release { env = Float(count - i) / Float(max(1, release)) }
+            out[i] = amplitude * env * Float(sin(phase))
+        }
+        return out
+    }
+
     /// Runs samples through a fresh AnalysisChain and collects all events.
     static func analyze(_ samples: [Float]) -> [Domain.AnalysisEvent] {
         let chain = AnalysisChain()

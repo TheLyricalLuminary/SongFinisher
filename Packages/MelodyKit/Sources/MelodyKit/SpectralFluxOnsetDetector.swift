@@ -3,24 +3,44 @@ import Accelerate
 
 /// Half-wave-rectified spectral-flux onset detection (docs/ARCHITECTURE.md §8):
 /// 1024-point FFT (Hann window, 10 ms hop), flux summed over ~100 Hz–5 kHz, adaptive
-/// median+MAD threshold, 50 ms dead time. Pitch-jump onsets for legato are fused
-/// downstream in `NoteSegmenter`, which owns the running note pitch.
+/// median+MAD threshold, peak-picked. Pitch-jump onsets for legato are fused downstream
+/// in `NoteSegmenter`, which owns the running note pitch.
+///
+/// ## Valley-armed firing
+/// An energy onset means *re-articulation*, and a re-articulation always carves an
+/// energy valley: RMS dips (gap, consonant, breath) and rises again into the new attack.
+/// The detector is therefore **armed only by a valley** (RMS < 78% of the running peak
+/// for ≥2 frames) and fires **at most one onset per valley**, at a peak-picked flux
+/// maximum above the adaptive threshold, provided RMS has risen off the valley floor.
+/// Each condition maps to one physical phenomenon this must reject:
+/// - one-per-valley  → vibrato/modulation flux bumps after an attack (no new valley);
+/// - rise-off-floor  → spectral-leakage bursts when a tone truncates out of the window
+///                     (flux peaks while RMS is still falling toward the valley);
+/// - peak-picking    → the attack's own flux plateau re-firing on its falling tail;
+/// - adaptive threshold → steady-state flux noise.
+/// Pitch changes with no valley (true legato) are deliberately NOT energy onsets —
+/// they belong to the NoteSegmenter's pitch-jump/melisma path.
 ///
 /// Not Sendable by design: confined to the analysis task/thread.
 final class SpectralFluxOnsetDetector {
     static let fftSize = 1024
-    static let deadTimeFrames = 5          // 50 ms @ 100 fps
+    /// Safety floor between fires; the valley requirement is the real limiter.
+    static let deadTimeFrames = 5
     static let thresholdWindowFrames = 70  // ±350 ms of flux history
     static let madMultiplier: Float = 1.5
     static let coldStartFluxFloor: Float = 0.05
-
-    /// A flux peak only counts as an onset if RMS at the peak has *risen* by this factor
-    /// over the quietest of the few frames before it. Attacks rise out of a dip; a tone
-    /// truncating out of the window bursts flux while RMS falls; a pitch glide bursts
-    /// flux while RMS stays flat. Flux magnitude alone cannot separate these (measured:
-    /// glide ≈ 5, attack ≈ 6–38) — the RMS shape can.
-    static let rmsRiseFactor: Float = 1.15
-    static let rmsLookbackFrames = 4
+    /// A 30 ms articulation gap seen through the 64 ms window dips RMS to ~73% of the
+    /// tone level; 85% arms on it with real margin (hop-grid alignment shifts the
+    /// measured dip a few percent per boundary). Sung-vibrato amplitude modulation can
+    /// occasionally cross this too — harmless, because arming alone doesn't fire: the
+    /// flux peak must also clear the adaptive threshold, which vibrato's own steady
+    /// flux keeps elevated.
+    static let valleyRatio: Float = 0.85
+    static let valleyPersistFrames = 2
+    /// RMS at fire time must have risen off the valley floor by this factor. Kept low:
+    /// its only job is rejecting truncation bursts, which peak while RMS still sits AT
+    /// the valley floor — any genuine rise clears 5% easily.
+    static let riseOffValleyFactor: Float = 1.05
 
     private let dft: vDSP_DFT_Setup
     private let binLow: Int
@@ -28,10 +48,15 @@ final class SpectralFluxOnsetDetector {
     private var hannWindow: [Float]
     private var previousMagnitudes: [Float]
     private var fluxHistory: [Float] = []
-    private var rmsHistory: [Float] = []
     private var framesSinceOnset = Int.max
     private var previousFlux: Float = 0
     private var beforePreviousFlux: Float = 0
+
+    // Valley-arming state.
+    private var armed = true                  // stream start counts as a valley
+    private var valleyMinRMS: Float = 0.0002
+    private var valleyCandidateFrames = 0
+    private var runningPeakRMS: Float = 0
 
     /// The most recent frame's onset strength (fed to the tempo estimator every frame).
     private(set) var latestFlux: Float = 0
@@ -53,10 +78,7 @@ final class SpectralFluxOnsetDetector {
         vDSP_DFT_DestroySetup(dft)
     }
 
-    /// Processes one window; returns true when an onset is confirmed. Onsets are
-    /// peak-picked: a frame fires only when the *previous* frame's flux was a local
-    /// maximum above the adaptive threshold — thresholding alone re-fires on the
-    /// falling tail of an attack the moment the dead time expires.
+    /// Processes one window; returns true when an onset is confirmed.
     func process(window: [Float]) -> Bool {
         precondition(window.count >= Self.fftSize)
         let magnitudes = magnitudeSpectrum(window)
@@ -73,6 +95,11 @@ final class SpectralFluxOnsetDetector {
         if fluxHistory.count > Self.thresholdWindowFrames { fluxHistory.removeFirst() }
         framesSinceOnset = framesSinceOnset == Int.max ? Int.max : framesSinceOnset + 1
 
+        var windowRMS: Float = 0
+        for i in 0..<Self.fftSize { windowRMS += window[i] * window[i] }
+        windowRMS = (windowRMS / Float(Self.fftSize)).squareRoot()
+        updateValleyState(rms: windowRMS)
+
         let threshold: Float
         if fluxHistory.count >= 10 {
             let sorted = fluxHistory.sorted()
@@ -84,21 +111,19 @@ final class SpectralFluxOnsetDetector {
             threshold = Self.coldStartFluxFloor
         }
 
-        var windowRMS: Float = 0
-        for i in 0..<Self.fftSize { windowRMS += window[i] * window[i] }
-        windowRMS = (windowRMS / Float(Self.fftSize)).squareRoot()
-        rmsHistory.append(windowRMS)
-        if rmsHistory.count > Self.rmsLookbackFrames + 2 { rmsHistory.removeFirst() }
-
         var fired = false
         let deadTimeClear = framesSinceOnset >= Self.deadTimeFrames || framesSinceOnset == Int.max
-        if deadTimeClear,
+        if armed,
+           deadTimeClear,
            previousFlux > threshold,
            previousFlux > beforePreviousFlux,
            previousFlux >= flux,
-           rmsRoseIntoPeak() {
+           windowRMS > valleyMinRMS * Self.riseOffValleyFactor + 0.0001 {
             fired = true
             framesSinceOnset = 0
+            armed = false
+            valleyCandidateFrames = 0
+            runningPeakRMS = windowRMS
         }
 
         beforePreviousFlux = previousFlux
@@ -106,24 +131,38 @@ final class SpectralFluxOnsetDetector {
         return fired
     }
 
-    /// RMS at the flux peak (one frame back) must exceed `rmsRiseFactor` × the quietest
-    /// RMS in the few frames before it.
-    private func rmsRoseIntoPeak() -> Bool {
-        guard rmsHistory.count >= 2 else { return true }  // first frames: nothing to rise from
-        let peakRMS = rmsHistory[rmsHistory.count - 2]
-        let lookback = rmsHistory.prefix(max(0, rmsHistory.count - 2))
-        guard let quietest = lookback.min() else { return true }
-        return peakRMS > quietest * Self.rmsRiseFactor + 0.0001
-    }
-
     func reset() {
         previousMagnitudes = [Float](repeating: 0, count: Self.fftSize / 2)
         fluxHistory.removeAll()
-        rmsHistory.removeAll()
         framesSinceOnset = Int.max
         latestFlux = 0
         previousFlux = 0
         beforePreviousFlux = 0
+        armed = true
+        valleyMinRMS = 0.0002
+        valleyCandidateFrames = 0
+        runningPeakRMS = 0
+    }
+
+    /// Arms the detector when RMS dips below `valleyRatio` × the running peak for at
+    /// least `valleyPersistFrames`; tracks the valley floor while armed.
+    private func updateValleyState(rms: Float) {
+        runningPeakRMS = max(rms, runningPeakRMS * 0.999)
+
+        if armed {
+            valleyMinRMS = min(valleyMinRMS, rms)
+            return
+        }
+
+        if rms < runningPeakRMS * Self.valleyRatio {
+            valleyCandidateFrames += 1
+            if valleyCandidateFrames >= Self.valleyPersistFrames {
+                armed = true
+                valleyMinRMS = rms
+            }
+        } else {
+            valleyCandidateFrames = 0
+        }
     }
 
     /// Hann-windowed magnitude spectrum via vDSP's real-input DFT (zrop packing).

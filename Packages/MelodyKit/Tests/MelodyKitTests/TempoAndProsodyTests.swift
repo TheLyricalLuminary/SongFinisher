@@ -44,15 +44,20 @@ import Domain
     }
 
     @Test func longNoteSlotsMarkTheSustainedNotes() {
-        // Notes 0, 2, 4 are 0.5–0.6 s; notes 1, 3 are 0.2 s → long slots ⊇ {0, 2, 4}.
-        var samples = TestSignals.melody([(60, 0.5), (62, 0.2), (64, 0.5), (65, 0.2), (67, 0.6)])
+        // Short notes are the majority so the median duration is short: only notes 0
+        // and 2 (0.55 s vs ~0.22 s median) can clear the 1.4× long-note threshold.
+        var samples = TestSignals.melody([(60, 0.55), (62, 0.22), (64, 0.55), (65, 0.22), (67, 0.22)])
         samples.append(contentsOf: TestSignals.silence(duration: 0.7))
         guard let phrase = TestSignals.analyze(samples).phrases.first, phrase.notes.count == 5 else {
             return  // covered by the spec test above; note-count drift is asserted there
         }
         let spec = DefaultProsodyDeriver().spec(for: phrase, tempo: nil, memoryHints: SessionMemory())
+        // Re-articulated notes (real gaps) must each earn a syllable slot — if onsets
+        // stop firing and the melisma path takes over, the budget silently collapses.
+        #expect(spec.budget.target == 5)
         #expect(spec.longNoteSlots.contains(0))
-        #expect(spec.longNoteSlots.contains(4))
+        #expect(spec.longNoteSlots.contains(2))
         #expect(!spec.longNoteSlots.contains(1))
+        #expect(!spec.longNoteSlots.contains(3))
     }
 }
