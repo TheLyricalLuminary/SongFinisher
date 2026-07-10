@@ -56,6 +56,7 @@ final class DiagnosticCaptureViewModel {
 
     func start() {
         guard pipelineTask == nil else { return }
+        resetTelemetry()
         pipelineTask = Task { [weak self] in await self?.run() }
     }
 
@@ -67,7 +68,31 @@ final class DiagnosticCaptureViewModel {
         state = .idle
     }
 
+    /// Clears prior-session data so a restart never shows ghost telemetry from the
+    /// previous take, and rewinds the throttle clock so it doesn't compare the new
+    /// session's near-zero `frame.time` against the old session's high-water mark
+    /// (each `analyze()` call runs a fresh `AnalysisChain`, so its clock restarts too).
+    private func resetTelemetry() {
+        lastPitchUIUpdate = -1
+        currentPitchHz = nil
+        currentMidiNote = nil
+        currentAmplitude = 0
+        currentConfidence = 0
+        isVoiced = false
+        tempoBPM = nil
+        tempoConfidence = 0
+        liveNoteCountInPhrase = 0
+        completedPhraseCount = 0
+        onsetTick = 0
+        noteLog.removeAll(keepingCapacity: true)
+    }
+
     private func run() async {
+        // A start() immediately followed by stop() cancels this task before it ever
+        // runs; without this guard the state write below would clobber stop()'s
+        // synchronous `.idle` the moment the scheduler gets to it.
+        guard !Task.isCancelled else { return }
+
         state = .requestingPermission
         let current = await services.permissions.currentMicPermission()
         let granted: Bool
@@ -76,7 +101,10 @@ final class DiagnosticCaptureViewModel {
         case .denied: granted = false
         case .undetermined: granted = await services.permissions.requestMicPermission() == .granted
         }
-        guard granted else { state = .permissionDenied; return }
+        guard granted else {
+            if !Task.isCancelled { state = .permissionDenied; pipelineTask = nil }
+            return
+        }
         guard !Task.isCancelled else { return }
 
         do throws(CaptureError) {
@@ -87,8 +115,20 @@ final class DiagnosticCaptureViewModel {
                 if Task.isCancelled { break }
                 handle(event)
             }
+            // The stream can end on its own (not just via stop()'s cancellation) —
+            // e.g. a fake/test double that finishes immediately. Without resetting
+            // pipelineTask here, the next start() call is silently blocked by the
+            // `guard pipelineTask == nil` check. Skipped when cancelled: stop()
+            // already performed this cleanup synchronously.
+            if !Task.isCancelled {
+                state = .idle
+                pipelineTask = nil
+            }
         } catch {
-            state = .failed("\(error)")
+            if !Task.isCancelled {
+                state = .failed("\(error)")
+                pipelineTask = nil
+            }
         }
     }
 
