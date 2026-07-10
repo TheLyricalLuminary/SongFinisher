@@ -43,4 +43,37 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
 
     /// Top-3 emotions, sorted, as sent to the AI layer.
     public var topEmotions: [EmotionScore] { Array(emotions.sortedByConfidence().prefix(3)) }
+
+    /// [More Like This]: re-request anchored to an exemplar line's imagery.
+    public func withVariationSeed(_ text: String) -> PhraseSpec {
+        PhraseSpec(
+            phraseID: phraseID, budget: budget, emotions: emotions,
+            tempoBPM: tempoBPM, tempoConfidence: tempoConfidence, contourShape: contourShape,
+            noteDurationsMs: noteDurationsMs, longNoteSlots: longNoteSlots, phraseDuration: phraseDuration,
+            requestedEmotionOverride: requestedEmotionOverride, variationSeedText: text
+        )
+    }
+
+    /// [Different Emotion]: re-request with the emotion block replaced.
+    public func withEmotionOverride(_ emotion: Emotion) -> PhraseSpec {
+        PhraseSpec(
+            phraseID: phraseID, budget: budget, emotions: emotions,
+            tempoBPM: tempoBPM, tempoConfidence: tempoConfidence, contourShape: contourShape,
+            noteDurationsMs: noteDurationsMs, longNoteSlots: longNoteSlots, phraseDuration: phraseDuration,
+            requestedEmotionOverride: emotion, variationSeedText: variationSeedText
+        )
+    }
+
+    /// The "+1 / −1 syllable" escape hatch: re-request against an adjusted exact
+    /// target (not a wider tolerance — the user has stated a precise correction).
+    public func withAdjustedSyllableTarget(by delta: Int) -> PhraseSpec {
+        let newTarget = max(1, budget.target + delta)
+        let adjustedBudget = SyllableBudget(target: newTarget, tolerance: budget.tolerance, stressMap: budget.stressMap)
+        return PhraseSpec(
+            phraseID: phraseID, budget: adjustedBudget, emotions: emotions,
+            tempoBPM: tempoBPM, tempoConfidence: tempoConfidence, contourShape: contourShape,
+            noteDurationsMs: noteDurationsMs, longNoteSlots: longNoteSlots, phraseDuration: phraseDuration,
+            requestedEmotionOverride: requestedEmotionOverride, variationSeedText: variationSeedText
+        )
+    }
 }

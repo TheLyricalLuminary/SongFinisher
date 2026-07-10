@@ -1,0 +1,128 @@
+import Foundation
+import Domain
+
+/// Task 4's live mic test (per the Phase 4 real-voice validation spec): taps the real
+/// `AudioCapturing` → `MelodyAnalyzing` pipeline and surfaces raw DSP telemetry with
+/// no lyric generation in the loop, so pitch/onset/segmentation quality on real
+/// hardware (breath noise, mic proximity, natural performance dynamics) can be judged
+/// by eye before LyricEngine is wired in.
+@MainActor
+@Observable
+final class DiagnosticCaptureViewModel {
+    enum CaptureState: Equatable {
+        case idle
+        case requestingPermission
+        case permissionDenied
+        case listening
+        case failed(String)
+    }
+
+    struct NoteLogEntry: Identifiable, Equatable {
+        let id = UUID()
+        let phraseIndex: Int
+        let onset: TimeInterval
+        let duration: TimeInterval
+        let midiNote: Double
+        let isMelisma: Bool
+    }
+
+    private(set) var state: CaptureState = .idle
+    private(set) var currentPitchHz: Double?
+    private(set) var currentMidiNote: Double?
+    private(set) var currentAmplitude: Float = 0
+    private(set) var currentConfidence: Float = 0
+    private(set) var isVoiced = false
+    private(set) var tempoBPM: Double?
+    private(set) var tempoConfidence: Float = 0
+    private(set) var liveNoteCountInPhrase = 0
+    private(set) var completedPhraseCount = 0
+    private(set) var noteLog: [NoteLogEntry] = []
+
+    /// Ticks up on every closed note — the view flashes on change as a visual "onset fired" cue.
+    private(set) var onsetTick = 0
+
+    static let maxLogEntries = 200
+    /// Pitch frames arrive at 100 Hz; UI updates are throttled to ~30 fps
+    /// (docs/ARCHITECTURE.md §5 UI guidance) using the frame's own analysis-clock time.
+    static let uiUpdateInterval: TimeInterval = 1.0 / 30.0
+
+    private let services: AppServices
+    private var pipelineTask: Task<Void, Never>?
+    private var lastPitchUIUpdate: TimeInterval = -1
+
+    init(services: AppServices) {
+        self.services = services
+    }
+
+    func start() {
+        guard pipelineTask == nil else { return }
+        pipelineTask = Task { [weak self] in await self?.run() }
+    }
+
+    func stop() {
+        pipelineTask?.cancel()
+        pipelineTask = nil
+        let capture = services.capture
+        Task { await capture.stop() }
+        state = .idle
+    }
+
+    private func run() async {
+        state = .requestingPermission
+        let current = await services.permissions.currentMicPermission()
+        let granted: Bool
+        switch current {
+        case .granted: granted = true
+        case .denied: granted = false
+        case .undetermined: granted = await services.permissions.requestMicPermission() == .granted
+        }
+        guard granted else { state = .permissionDenied; return }
+        guard !Task.isCancelled else { return }
+
+        do throws(CaptureError) {
+            let chunks = try await services.capture.start()
+            guard !Task.isCancelled else { return }
+            state = .listening
+            for await event in services.analyzer.analyze(chunks) {
+                if Task.isCancelled { break }
+                handle(event)
+            }
+        } catch {
+            state = .failed("\(error)")
+        }
+    }
+
+    private func handle(_ event: AnalysisEvent) {
+        switch event {
+        case .pitch(let frame):
+            guard frame.time - lastPitchUIUpdate >= Self.uiUpdateInterval else { return }
+            lastPitchUIUpdate = frame.time
+            currentPitchHz = frame.frequencyHz
+            currentMidiNote = frame.midiNote
+            currentAmplitude = frame.rmsEnergy
+            currentConfidence = frame.confidence
+            isVoiced = frame.isVoiced
+
+        case .tempoUpdated(let tempo):
+            tempoBPM = tempo.bpm
+            tempoConfidence = tempo.confidence
+
+        case .phraseInProgress(_, let provisionalNotes):
+            if provisionalNotes > liveNoteCountInPhrase { onsetTick += 1 }
+            liveNoteCountInPhrase = provisionalNotes
+
+        case .phraseCompleted(let phrase):
+            completedPhraseCount += 1
+            liveNoteCountInPhrase = 0
+            for note in phrase.notes {
+                noteLog.append(NoteLogEntry(
+                    phraseIndex: phrase.index, onset: note.onset, duration: note.duration,
+                    midiNote: note.midiNote, isMelisma: note.isMelisma
+                ))
+            }
+            if noteLog.count > Self.maxLogEntries {
+                noteLog.removeFirst(noteLog.count - Self.maxLogEntries)
+            }
+        }
+    }
+}
