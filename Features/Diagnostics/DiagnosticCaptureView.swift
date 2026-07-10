@@ -95,7 +95,7 @@ struct DiagnosticCaptureView: View {
                 Text("\(viewModel.liveNoteCountInPhrase)")
                     .font(.system(.body, design: .monospaced, weight: .bold))
                     .foregroundStyle(onsetFlash ? Self.accent : Self.fg)
-                    .gridCellColumns(2)
+                metric("MODE", viewModel.inputMode == .rhythmic ? "RHYTHMIC" : "MELODIC")
             }
         }
         .padding(12)
@@ -211,7 +211,8 @@ struct DiagnosticCaptureView: View {
         let phrase = String(format: "p%02d", entry.phraseIndex)
         let onset = String(format: "onset=%6.2fs", entry.onset)
         let duration = String(format: "dur=%4dms", Int(entry.duration * 1000))
-        let note = DiagnosticFormatting.noteName(midi: entry.midiNote).padding(toLength: 6, withPad: " ", startingAt: 0)
+        let note = (entry.isRhythm ? "STRUM" : DiagnosticFormatting.noteName(midi: entry.midiNote))
+            .padding(toLength: 6, withPad: " ", startingAt: 0)
         let melisma = entry.isMelisma ? "MEL" : ""
         return Text("\(phrase)  \(onset)  \(duration)  \(note) \(melisma)")
             .font(.caption2)

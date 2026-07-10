@@ -20,6 +20,9 @@ struct SessionView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     syllableMeter
+                    if showsDensityPicker {
+                        densityPicker
+                    }
                     suggestionCard
                     if let error = viewModel.generationError {
                         errorBanner(error)
@@ -48,6 +51,14 @@ struct SessionView: View {
             Text(stateLabel)
                 .font(.headline)
             Spacer()
+            if viewModel.inputMode == .rhythmic {
+                Label("Rhythm", systemImage: "waveform.path")
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.thinMaterial, in: Capsule())
+                    .accessibilityLabel("Rhythm mode: hearing strummed chords")
+            }
             if let tempo = viewModel.tempo, tempo.isReliable {
                 Label(String(format: "%.0f BPM", tempo.bpm), systemImage: "metronome")
                     .font(.subheadline)
@@ -108,6 +119,31 @@ struct SessionView: View {
         .frame(minHeight: 16)
         .accessibilityLabel("Syllable meter")
         .accessibilityValue(viewModel.currentSpec.map { "\($0.budget.target) syllables" } ?? "\(viewModel.liveSyllableCount) notes so far")
+    }
+
+    // MARK: - Density (rhythm-only phrases)
+
+    /// Chords carry no melody line to count syllables from, so the singer picks how
+    /// many syllables per strum they intend to sing. Only shown when it can matter.
+    private var showsDensityPicker: Bool {
+        viewModel.inputMode == .rhythmic || viewModel.currentPhrase?.isRhythmOnly == true
+    }
+
+    private var densityPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Syllables per strum")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Syllables per strum", selection: Binding(
+                get: { viewModel.density },
+                set: { viewModel.setDensity($0) }
+            )) {
+                ForEach(SyllableDensity.allCases, id: \.self) { density in
+                    Text(density.rawValue.capitalized).tag(density)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
     }
 
     // MARK: - Suggestion card

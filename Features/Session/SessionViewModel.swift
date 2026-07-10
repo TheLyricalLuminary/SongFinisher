@@ -30,6 +30,11 @@ final class SessionViewModel {
     private(set) var acceptedLines: [LyricLine] = []
     private(set) var memory = SessionMemory()
     private(set) var generationError: LyricProviderError?
+    /// What the DSP chain currently hears: a melodic line, or strummed chords (the
+    /// rhythm-only fallback, where the syllable budget comes from the onset pocket).
+    private(set) var inputMode: InputMode = .melodic
+    /// Syllables-per-strum for rhythm-only phrases; ignored for melodic ones.
+    private(set) var density: SyllableDensity = .medium
 
     private let services: AppServices
     private var pipelineTask: Task<Void, Never>?
@@ -111,6 +116,8 @@ final class SessionViewModel {
             liveSyllableCount = provisionalNotes
         case .phraseCompleted(let phrase):
             beginSuggesting(for: phrase)
+        case .inputModeChanged(let mode):
+            inputMode = mode
         }
     }
 
@@ -122,7 +129,7 @@ final class SessionViewModel {
         generationError = nil
         liveSyllableCount = 0
         state = .analyzingPhrase
-        let spec = services.prosody.spec(for: phrase, tempo: tempo, memoryHints: memory)
+        let spec = services.prosody.spec(for: phrase, tempo: tempo, memoryHints: memory, density: density)
         request(spec, phraseID: phrase.id)
     }
 
@@ -202,6 +209,21 @@ final class SessionViewModel {
             memory = SessionMemoryUpdater.rejecting(top.text, reason: .regenerated, into: memory)
         }
         request(spec.withAdjustedSyllableTarget(by: delta), phraseID: spec.phraseID)
+    }
+
+    /// The sparse/medium/dense selector for strummed input. When a rhythm-only phrase
+    /// is on screen its spec is re-derived at the new density and re-requested — the
+    /// singer is telling us the current suggestion has the wrong number of syllables
+    /// per strum, so a stale card would be worse than a fresh request.
+    func setDensity(_ newDensity: SyllableDensity) {
+        guard newDensity != density else { return }
+        density = newDensity
+        guard let phrase = currentPhrase, phrase.isRhythmOnly else { return }
+        if let top = ranked.first?.candidate {
+            memory = SessionMemoryUpdater.rejecting(top.text, reason: .regenerated, into: memory)
+        }
+        let spec = services.prosody.spec(for: phrase, tempo: tempo, memoryHints: memory, density: newDensity)
+        request(spec, phraseID: phrase.id)
     }
 
     private func resetSuggestion() {

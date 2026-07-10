@@ -347,6 +347,22 @@ after warm-up).
   range, mean interval, note density, mean duration, articulation ratio, energy arc,
   ends-on-descent) → transparent 8-label weight matrix (in a plist, tunable without code) →
   softmax. Top-3 distribution goes to the model, never a single hard label.
+- **Hybrid melodic/rhythmic routing (guitar chords):** YIN is monophonic by design, so a
+  `PolyphonyDetector` watches every energetic hop — a frame is polyphonic when ≥ 2 strong
+  spectral peaks are inharmonic against YIN's own f0 (a chord's fifth/third), or when YIN
+  collapses under a strong, spectrally dense signal (the strum attack). Ratio math alone
+  can't do it: a missing-fundamental note and a root+fifth chord are spectrally the same
+  family; time-domain periodicity is the tiebreaker. Votes smooth over ~0.5 s (enter
+  rhythmic ≥ 50%, exit ≤ 15%; silence never votes). In **rhythmic mode** the pitch path is
+  bypassed and a `RhythmSegmenter` builds `isRhythmOnly` phrases from the onset pocket
+  (a "note" = one strum's ring-out, placeholder pitch). Their specs come from rhythm alone:
+  syllable budget = onset grid × user-selected `SyllableDensity` (sparse 1× / medium 1.5× /
+  dense 2× per strum), stress from beat-grid + agogic + dynamic prominence, long-note slots
+  from long ring-outs, contour `flat`, pitch-derived emotion features neutral, tolerance
+  never below ±1 (the budget is an estimate by construction). Tempo keeps tracking the flux
+  envelope in both modes; mode flips flush the outgoing segmenter first, then emit
+  `inputModeChanged`. Top-note melody extraction for arpeggiated lines is a deferred
+  enhancement; full polyphonic transcription is out of scope.
 
 **Honest latency budget** (includes window group delay and median-filter delay):
 
