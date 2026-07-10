@@ -23,6 +23,7 @@ SFLX binary format v1 (little-endian):
     posBits       u16  POS bitset (see POS_BITS)
     zipf          u8   round(zipf * 20)
     valence       i8   round(vader_mean * 25), clamped to [-100, 100]
+    cluster       u8   longest run of consecutive consonant phonemes in the word
     rhymeKey      u32  FNV-1a of final vowel + coda phonemes (stress digits stripped)
   Strings blob: UTF-8 concatenated lowercase words, sorted ascending (binary-searchable).
 
@@ -131,9 +132,12 @@ def analyze(phones):
     open_bits = 0
     last_vowel_index = -1
     previous_base = None
+    cluster = 0
+    run = 0
     for i, ph in enumerate(phones):
         base = ph.rstrip("012")
         if base in VOWELS:
+            run = 0
             if ph == "ER0" and previous_base in ("AY", "AW"):
                 previous_base = base
                 last_vowel_index = i
@@ -146,6 +150,8 @@ def analyze(phones):
             last_vowel_index = i
             previous_base = base
         else:
+            run += 1
+            cluster = max(cluster, run)
             previous_base = base
     # Rhyme key: final vowel + coda, stress digits stripped (FNV-1a 32-bit).
     rhyme_key = 0x811C9DC5
@@ -153,7 +159,7 @@ def analyze(phones):
         for ph in phones[last_vowel_index:]:
             for b in ph.rstrip("012").encode():
                 rhyme_key = ((rhyme_key ^ b) * 0x01000193) & 0xFFFFFFFF
-    return syllables, stress_bits, open_bits, rhyme_key
+    return syllables, stress_bits, open_bits, min(cluster, 255), rhyme_key
 
 
 def main():
@@ -170,12 +176,12 @@ def main():
         pos = moby.get(word, 0)
         if pos == 0 and zipf < NO_POS_MIN_ZIPF:
             continue
-        syllables, stress, open_bits, rhyme = analyze(phones)
+        syllables, stress, open_bits, cluster, rhyme = analyze(phones)
         if not 1 <= syllables <= MAX_SYLLABLES:
             continue
         zipf_q = min(255, round(zipf * 20))
         val_q = max(-100, min(100, round(vader.get(word, 0.0) * 25)))
-        rows.append((word, syllables, stress, open_bits, pos, zipf_q, val_q, rhyme))
+        rows.append((word, syllables, stress, open_bits, pos, zipf_q, val_q, cluster, rhyme))
 
     rows.sort(key=lambda r: r[0])
     print(f"admitted: {len(rows)} words")
@@ -197,7 +203,8 @@ def main():
     body += struct.pack(f"<{n}H", *(r[4] for r in rows))
     body += struct.pack(f"<{n}B", *(r[5] for r in rows))
     body += struct.pack(f"<{n}b", *(r[6] for r in rows))
-    body += struct.pack(f"<{n}I", *(r[7] for r in rows))
+    body += struct.pack(f"<{n}B", *(r[7] for r in rows))
+    body += struct.pack(f"<{n}I", *(r[8] for r in rows))
 
     strings_off = 32 + len(body)
     header = struct.pack("<4sIIII12x", b"SFLX", 1, n, strings_off, len(strings))
@@ -216,9 +223,12 @@ def main():
         assert w in idx, f"missing expected word: {w}"
     assert idx["fire"][1] == 1
     assert idx["waiting"][1] == 2 and idx["waiting"][2] == 0b01
+    # Cluster: "strengths" S T R EH1 NG K TH S -> onset 3, coda 4 -> max 4.
+    assert idx["strengths"][7] >= 3, f"strengths cluster {idx['strengths'][7]}"
+    assert idx["day"][7] <= 1
     # Rhyme: light/night share a key; light/love must not.
-    assert idx["light"][7] == idx["night"][7]
-    assert idx["light"][7] != idx["love"][7]
+    assert idx["light"][8] == idx["night"][8]
+    assert idx["light"][8] != idx["love"][8]
     print("self-checks passed")
 
 

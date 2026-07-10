@@ -13,7 +13,11 @@ let package = Package(
         .package(path: "../Domain")
     ],
     targets: [
-        .target(name: "LyricEngine", dependencies: ["Domain"]),
+        .target(
+            name: "LyricEngine",
+            dependencies: ["Domain"],
+            resources: [.copy("Resources/lexicon.bin")]
+        ),
         .testTarget(name: "LyricEngineTests", dependencies: ["LyricEngine"]),
     ]
 )
