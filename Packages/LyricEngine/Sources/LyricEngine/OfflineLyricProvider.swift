@@ -30,9 +30,11 @@ public struct OfflineLyricProvider: LyricProviding, Sendable {
         let target = max(1, spec.budget.target)
 
         var pool: [AssembledLine] = []
+        var tried = Set<Int>()
         for delta in Self.searchOrder(tolerance: spec.budget.tolerance) {
             let n = target + delta
             guard n >= 1 else { continue }
+            tried.insert(n)
             pool.append(contentsOf: assembler.assemble(
                 spec: spec,
                 syllableTarget: n,
@@ -40,6 +42,23 @@ public struct OfflineLyricProvider: LyricProviding, Sendable {
                 poolTarget: 60
             ))
             if pool.count >= 60 { break }
+        }
+
+        // The template bank's shortest frame needs 3 syllables, so a confident (zero- or
+        // narrow-tolerance) budget of 1–2 starves here even though nothing upstream is
+        // wrong. Widen past the phrase's own tolerance as an absolute last resort — same
+        // honest-degradation idea as the tolerance widening itself — rather than breaking
+        // the documented "always returns at least one candidate" contract.
+        if pool.isEmpty {
+            for n in 1...12 where !tried.contains(n) {
+                pool.append(contentsOf: assembler.assemble(
+                    spec: spec,
+                    syllableTarget: n,
+                    seed: seed &+ UInt64(bitPattern: Int64(n - target)),
+                    poolTarget: 60
+                ))
+                if !pool.isEmpty { break }
+            }
         }
 
         guard !pool.isEmpty else {

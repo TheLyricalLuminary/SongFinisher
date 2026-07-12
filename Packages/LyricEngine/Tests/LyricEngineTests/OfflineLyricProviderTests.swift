@@ -30,6 +30,24 @@ import Domain
         }
     }
 
+    /// Regression: a confident phrase (zero tolerance) budgeted at 1–2 syllables used to
+    /// throw `invalidResponse`, because every template needs at least 3 slots — the
+    /// existing "1...12" sweep above always used tolerance 2, which masked this by
+    /// reaching a 3-syllable search step within the declared tolerance.
+    @Test func neverThrowsForZeroToleranceOneOrTwoSyllableBudget() async {
+        let provider = OfflineLyricProvider(store: Fixtures.store)
+        for syllables in [1, 2] {
+            let pattern = (0..<syllables).map { $0 == 0 ? "S" : "w" }.joined()
+            let spec = Fixtures.spec(syllables: syllables, stress: pattern, tolerance: 0)
+            do {
+                let candidates = try await provider.candidates(for: spec, memory: SessionMemory())
+                #expect(!candidates.isEmpty, "no candidates for \(syllables) syllables at zero tolerance")
+            } catch {
+                Issue.record("threw for \(syllables) syllables at zero tolerance: \(error)")
+            }
+        }
+    }
+
     @Test func sameInputAndAttemptCountProducesIdenticalOutput() async throws {
         let provider = OfflineLyricProvider(store: Fixtures.store)
         let phraseID = UUID()
