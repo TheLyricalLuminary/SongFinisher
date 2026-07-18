@@ -16,6 +16,12 @@ struct SessionView: View {
         viewModel.state == .analyzingPhrase || viewModel.state == .suggesting
     }
 
+    /// Chords carry no melody line to count syllables from, so the singer picks how
+    /// many syllables per strum they intend to sing. Only shown when it can matter.
+    private var showsDensityPicker: Bool {
+        viewModel.inputMode == .rhythmic || viewModel.currentPhrase?.isRhythmOnly == true
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -34,6 +40,9 @@ struct SessionView: View {
                     TempoBadge(tempo: viewModel.currentTempo)
                     ConfidenceDot(confidence: viewModel.currentConfidence)
                     Spacer()
+                    if viewModel.inputMode == .rhythmic {
+                        RhythmBadge()
+                    }
                 }
 
                 WaveformView(energyHistory: viewModel.energyHistory, isVoiced: viewModel.isVoiced)
@@ -46,6 +55,10 @@ struct SessionView: View {
                         finalPattern: showsFinalStressPattern ? viewModel.currentSpec?.budget.stressMap.pattern : nil,
                         liveCount: viewModel.liveNoteCountInPhrase
                     )
+                }
+
+                if showsDensityPicker {
+                    DensityPicker(density: viewModel.density, onChange: { viewModel.setDensity($0) })
                 }
 
                 if showsFinalStressPattern {
@@ -214,6 +227,42 @@ private struct ConfidenceDot: View {
         if confidence >= 0.7 { return .green }
         if confidence >= 0.4 { return .yellow }
         return .red
+    }
+}
+
+/// Shown when the DSP chain has classified the input as strummed chords rather than
+/// a single melodic line — YIN pitch tracking is meaningless there, so the syllable
+/// budget comes from the onset grid instead (see `DensityPicker` below).
+private struct RhythmBadge: View {
+    var body: some View {
+        Label("Rhythm", systemImage: "waveform.path")
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.thinMaterial, in: Capsule())
+            .accessibilityLabel("Rhythm mode: hearing strummed chords")
+    }
+}
+
+/// Sparse/medium/dense selector for strummed input: chords carry no melody line to
+/// count syllables from, so the singer states how many syllables per strum they
+/// intend to sing, and the onset grid supplies the accents.
+private struct DensityPicker: View {
+    let density: SyllableDensity
+    let onChange: (SyllableDensity) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("SYLLABLES PER STRUM")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            Picker("Syllables per strum", selection: Binding(get: { density }, set: onChange)) {
+                ForEach(SyllableDensity.allCases, id: \.self) { option in
+                    Text(option.rawValue.capitalized).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
     }
 }
 

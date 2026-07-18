@@ -4,7 +4,10 @@ import Domain
 /// The main "Listening…" screen's brain (docs/ARCHITECTURE.md §6): drives the real
 /// capture → analyze → prosody → lyrics → rank pipeline end to end, phrase by phrase.
 /// Works identically whether the melody came from a voice or an instrument — the
-/// DSP layer only ever sees pitch/onset/amplitude, never the source.
+/// DSP layer only ever sees pitch/onset/amplitude, never the source. Strummed chords
+/// are detected as polyphonic input and routed through the rhythm-only fallback: the
+/// syllable budget then comes from the onset grid scaled by the singer's chosen
+/// density rather than from pitch.
 @MainActor
 @Observable
 final class SessionViewModel {
@@ -28,8 +31,14 @@ final class SessionViewModel {
     private(set) var currentTempo: TempoEstimate?
     private(set) var liveNoteCountInPhrase = 0
     private(set) var energyHistory: [Float] = []
+    /// What the DSP chain currently hears: a melodic line, or strummed chords (the
+    /// rhythm-only fallback, where the syllable budget comes from the onset pocket).
+    private(set) var inputMode: InputMode = .melodic
+    /// Syllables-per-strum for rhythm-only phrases; ignored for melodic ones.
+    private(set) var density: SyllableDensity = .medium
 
     // Lyric generation.
+    private(set) var currentPhrase: Phrase?
     private(set) var currentSpec: PhraseSpec?
     private(set) var rankedCandidates: [RankedCandidate] = []
     private(set) var generationError: String?
@@ -75,6 +84,8 @@ final class SessionViewModel {
         currentTempo = nil
         liveNoteCountInPhrase = 0
         energyHistory.removeAll(keepingCapacity: true)
+        inputMode = .melodic
+        currentPhrase = nil
         currentSpec = nil
         rankedCandidates = []
         generationError = nil
@@ -139,23 +150,27 @@ final class SessionViewModel {
 
         case .phraseCompleted(let phrase):
             handlePhraseCompleted(phrase)
+
+        case .inputModeChanged(let mode):
+            inputMode = mode
         }
     }
 
     private func handlePhraseCompleted(_ phrase: Phrase) {
         liveNoteCountInPhrase = 0
+        currentPhrase = phrase
         generationTask?.cancel()
         state = .analyzingPhrase
-        let spec = services.prosody.spec(for: phrase, tempo: currentTempo, memoryHints: sessionMemory)
+        let spec = services.prosody.spec(for: phrase, tempo: currentTempo, memoryHints: sessionMemory, density: density)
         generationTask = Task { [weak self] in await self?.generate(spec: spec) }
     }
 
     /// The single path every suggestion request goes through — initial generation,
-    /// [Regenerate], [More Like This], [Different Emotion], and the +1/−1 syllable
-    /// chips all funnel here with a modified `PhraseSpec`. Cancelling the prior task
-    /// before starting a new one is the "latest-phrase-wins" supersession
-    /// (docs/ARCHITECTURE.md §6); the phraseID guard below covers the case where a
-    /// stale task's typed-throw catch block still runs after cancellation.
+    /// [Regenerate], [More Like This], [Different Emotion], the +1/−1 syllable chips,
+    /// and the rhythm density picker all funnel here with a modified `PhraseSpec`.
+    /// Cancelling the prior task before starting a new one is the "latest-phrase-wins"
+    /// supersession (docs/ARCHITECTURE.md §6); the phraseID guard below covers the
+    /// case where a stale task's typed-throw catch block still runs after cancellation.
     private func generate(spec: PhraseSpec) async {
         guard !Task.isCancelled else { return }
         currentSpec = spec
@@ -202,6 +217,7 @@ final class SessionViewModel {
         sessionMemory.dominantEmotion = emotion
         generationTask?.cancel()
         generationTask = nil
+        currentPhrase = nil
         currentSpec = nil
         rankedCandidates = []
         generationError = nil
@@ -228,5 +244,18 @@ final class SessionViewModel {
     func adjustSyllableTarget(by delta: Int) {
         guard let spec = currentSpec else { return }
         restartGeneration(spec: spec.withAdjustedSyllableTarget(by: delta))
+    }
+
+    /// The sparse/medium/dense selector for strummed input. When a rhythm-only phrase
+    /// is on screen its spec is re-derived at the new density and re-requested — the
+    /// singer is telling us the current suggestion has the wrong number of syllables
+    /// per strum, so a stale card would be worse than a fresh request.
+    func setDensity(_ newDensity: SyllableDensity) {
+        guard newDensity != density else { return }
+        density = newDensity
+        guard let phrase = currentPhrase, phrase.isRhythmOnly else { return }
+        rejectShownCandidates(reason: .regenerated)
+        let spec = services.prosody.spec(for: phrase, tempo: currentTempo, memoryHints: sessionMemory, density: newDensity)
+        restartGeneration(spec: spec)
     }
 }

@@ -61,6 +61,10 @@ final class SpectralFluxOnsetDetector {
     /// The most recent frame's onset strength (fed to the tempo estimator every frame).
     private(set) var latestFlux: Float = 0
 
+    /// The most recent frame's magnitude spectrum (fed to the polyphony detector every
+    /// frame — computed once here, never recomputed downstream).
+    private(set) var latestMagnitudes: [Float] = []
+
     init(sampleRate: Double = 16_000) {
         guard let setup = vDSP_DFT_zrop_CreateSetup(nil, vDSP_Length(Self.fftSize), .FORWARD) else {
             fatalError("vDSP_DFT_zrop_CreateSetup failed for size \(Self.fftSize)")
@@ -89,6 +93,7 @@ final class SpectralFluxOnsetDetector {
             if delta > 0 { flux += delta }
         }
         previousMagnitudes = magnitudes
+        latestMagnitudes = magnitudes
         latestFlux = flux
 
         fluxHistory.append(flux)
@@ -133,6 +138,7 @@ final class SpectralFluxOnsetDetector {
 
     func reset() {
         previousMagnitudes = [Float](repeating: 0, count: Self.fftSize / 2)
+        latestMagnitudes.removeAll()
         fluxHistory.removeAll()
         framesSinceOnset = Int.max
         latestFlux = 0
