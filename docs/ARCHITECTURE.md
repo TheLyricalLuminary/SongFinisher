@@ -27,10 +27,15 @@ Every arrow is an `AsyncStream` of a `Sendable` value type.
    memcpy only; a dedicated `Thread` runs the 10 ms hop loop, immune to pool starvation.
 4. **YIN pitch detection** — its aperiodicity measure is reused three ways: UI confidence,
    voicing gate, and prompt `pitchConfidence`.
-5. **Provider-agnostic AI behind `LyricProviding`**, Claude (`claude-sonnet-5`, structured
-   outputs, prompt caching, no sampling params, thinking disabled) as default, with a
-   deterministic offline provider that renders **instantly as a placeholder and upgrades in
-   place** when Claude answers.
+5. **Provider-agnostic AI behind `LyricProviding`.** The shipped premium path is the
+   **on-device Foundation Models framework** (`FoundationModelsLyricProvider`:
+   `LanguageModelSession` + `@Generable` guided output, selected at composition time when
+   `SystemLanguageModel` is available, per-request fallback to the offline assembler on any
+   generation failure) — nothing leaves the device. The deterministic offline provider is
+   the universal fallback on non-Apple-Intelligence hardware. Claude (`claude-sonnet-5`,
+   structured outputs, prompt caching) remains a designed-but-unshipped optional remote
+   provider behind the same seam; the upgrade-in-place composition described in §9 applies
+   to it if it ever ships.
 6. **The model is never the judge of objective constraints**: syllables and stress are
    recounted on-device against a bundled CMU-dict subset; objective axes carry 70% of the
    ranking weight.

@@ -106,11 +106,16 @@ struct SuggestionCardView: View {
 
     private func providerBadge(for candidate: LyricCandidate) -> some View {
         HStack(spacing: 6) {
-            if candidate.provider == .offline {
+            switch candidate.provider {
+            case .offline:
                 Label("OFFLINE DRAFT", systemImage: "bolt.slash.fill")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
-            } else {
+            case .appleIntelligence:
+                Label("ON-DEVICE AI", systemImage: "sparkles")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+            case .claude:
                 Label("CLAUDE", systemImage: "sparkles")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.accentColor)

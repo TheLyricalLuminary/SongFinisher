@@ -17,7 +17,7 @@ character — live, phrase by phrase.
 | `Features/` | SwiftUI views + `@Observable` ViewModels |
 | `Packages/Domain` | Models, service protocols, pure logic — imports Foundation only |
 | `Packages/MelodyKit` | Real-time audio capture + DSP (YIN pitch, onsets, tempo, phrases) |
-| `Packages/LyricEngine` | Claude provider, offline provider, ranking pipeline |
+| `Packages/LyricEngine` | Foundation Models (on-device) provider, offline provider, ranking pipeline |
 | `Packages/PersistenceKit` | SwiftData store (quarantined), Keychain |
 
 ## Building
