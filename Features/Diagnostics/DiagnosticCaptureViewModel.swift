@@ -38,6 +38,8 @@ final class DiagnosticCaptureViewModel {
     private(set) var tempoConfidence: Float = 0
     private(set) var liveNoteCountInPhrase = 0
     private(set) var completedPhraseCount = 0
+    private(set) var discardedPhraseCount = 0
+    private(set) var lastDiscardReason: PhraseDiscardReason?
     private(set) var noteLog: [NoteLogEntry] = []
     private(set) var inputMode: InputMode = .melodic
 
@@ -86,6 +88,8 @@ final class DiagnosticCaptureViewModel {
         tempoConfidence = 0
         liveNoteCountInPhrase = 0
         completedPhraseCount = 0
+        discardedPhraseCount = 0
+        lastDiscardReason = nil
         onsetTick = 0
         inputMode = .melodic
         noteLog.removeAll(keepingCapacity: true)
@@ -168,6 +172,11 @@ final class DiagnosticCaptureViewModel {
             if noteLog.count > Self.maxLogEntries {
                 noteLog.removeFirst(noteLog.count - Self.maxLogEntries)
             }
+
+        case .phraseDiscarded(let reason):
+            discardedPhraseCount += 1
+            lastDiscardReason = reason
+            liveNoteCountInPhrase = 0
 
         case .inputModeChanged(let mode):
             inputMode = mode

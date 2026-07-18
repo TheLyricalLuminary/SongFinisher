@@ -18,6 +18,9 @@ final class PhraseSegmenter {
     enum Event {
         case progress(noteCount: Int)
         case completed(Phrase)
+        /// A boundary fired but the accumulated phrase failed a discard rule. The
+        /// accumulator has been reset either way; surfaced so the chain can report it.
+        case discarded(PhraseDiscardReason)
     }
 
     private var notes: [NoteEvent] = []
@@ -94,9 +97,11 @@ final class PhraseSegmenter {
         let phraseNotes = Self.foldMelismaArtifacts(notes)
         let duration = end - start
 
-        guard phraseNotes.count >= Self.minimumNotes, duration >= Self.minimumDuration else {
-            return nil  // discard as a false start (cough, noise, single blip)
-        }
+        // False starts (cough, noise, single blip) are discarded — but never silently:
+        // the reason reaches the diagnostic tool, because "phrase dropped" and
+        // "boundary never fired" look identical from the outside.
+        guard phraseNotes.count >= Self.minimumNotes else { return .discarded(.tooFewNotes) }
+        guard duration >= Self.minimumDuration else { return .discarded(.tooShort) }
 
         let meanConfidence = voicedConfidences.isEmpty
             ? 0

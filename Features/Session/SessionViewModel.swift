@@ -151,6 +151,11 @@ final class SessionViewModel {
         case .phraseCompleted(let phrase):
             handlePhraseCompleted(phrase)
 
+        case .phraseDiscarded:
+            // The segmenter reset its accumulator; without this the live meter shows
+            // the dropped phrase's stale note count until the next phrase starts.
+            liveNoteCountInPhrase = 0
+
         case .inputModeChanged(let mode):
             inputMode = mode
         }

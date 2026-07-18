@@ -25,6 +25,9 @@ final class RhythmSegmenter {
     enum Event {
         case progress(noteCount: Int)
         case completed(Phrase)
+        /// A boundary fired but the accumulated phrase failed a discard rule. The
+        /// accumulator has been reset either way; surfaced so the chain can report it.
+        case discarded(PhraseDiscardReason)
     }
 
     private struct OpenStrum {
@@ -133,9 +136,11 @@ final class RhythmSegmenter {
 
         guard let start = phraseStart else { return nil }
         let duration = end - start
-        guard notes.count >= Self.minimumNotes, duration >= Self.minimumDuration else {
-            return nil  // discard as noise (a single bump or scrape)
-        }
+        // Noise (a single bump or scrape) is discarded — visibly, so the diagnostic
+        // can distinguish "phrase dropped" from "boundary never fired". A lone strum
+        // left to ring is 1 note and lands here by design: two strums minimum.
+        guard notes.count >= Self.minimumNotes else { return .discarded(.tooFewNotes) }
+        guard duration >= Self.minimumDuration else { return .discarded(.tooShort) }
 
         let phrase = Phrase(
             index: phraseIndex,

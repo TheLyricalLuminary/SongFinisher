@@ -97,6 +97,13 @@ struct DiagnosticCaptureView: View {
                     .foregroundStyle(onsetFlash ? Self.accent : Self.fg)
                 metric("MODE", viewModel.inputMode == .rhythmic ? "RHYTHMIC" : "MELODIC")
             }
+            GridRow {
+                Text("DISCARDED").font(.caption2).foregroundStyle(Self.dim)
+                Text(discardText)
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(viewModel.discardedPhraseCount > 0 ? .red : Self.fg)
+                    .gridCellColumns(2)
+            }
         }
         .padding(12)
         .accessibilityElement(children: .combine)
@@ -138,6 +145,20 @@ struct DiagnosticCaptureView: View {
     private var tempoText: String {
         guard let bpm = viewModel.tempoBPM, viewModel.tempoConfidence > 0.35 else { return "—" }
         return String(format: "%.0f BPM", bpm)
+    }
+
+    /// Distinguishes the two ways PHRASES can sit at 0: boundaries that never fire
+    /// show 0 here too; boundaries that fire but fail a discard rule tick this up
+    /// with the rule that rejected them.
+    private var discardText: String {
+        guard viewModel.discardedPhraseCount > 0 else { return "0" }
+        let reason: String
+        switch viewModel.lastDiscardReason {
+        case .tooFewNotes: reason = "TOO FEW NOTES"
+        case .tooShort: reason = "TOO SHORT"
+        case nil: reason = ""
+        }
+        return "\(viewModel.discardedPhraseCount)  last: \(reason)"
     }
 
     private var controls: some View {

@@ -108,6 +108,8 @@ final class AnalysisChain {
                 emit(.phraseInProgress(start: time, provisionalNotes: count))
             case .completed(let phrase):
                 emit(.phraseCompleted(phrase))
+            case .discarded(let reason):
+                emit(.phraseDiscarded(reason))
             case nil:
                 break
             }
@@ -118,6 +120,8 @@ final class AnalysisChain {
                 emit(.phraseInProgress(start: time, provisionalNotes: count))
             case .completed(let phrase):
                 emit(.phraseCompleted(RhythmSegmenter.withBeatStrengths(phrase, tempo: tempoEstimator.current)))
+            case .discarded(let reason):
+                emit(.phraseDiscarded(reason))
             case nil:
                 break
             }
@@ -141,22 +145,31 @@ final class AnalysisChain {
     private func flushMelodic(at time: TimeInterval, emit: (AnalysisEvent) -> Void) {
         let tempo = tempoEstimator.current
         if let closed = noteSegmenter.flush(at: time) {
-            if case .completed(let phrase)? = phraseSegmenter.ingest(
+            emitMelodic(phraseSegmenter.ingest(
                 frame: PitchFrame(time: time, frequencyHz: nil, midiNote: nil, rmsEnergy: 0, confidence: 0),
                 closedNote: closed,
                 tempo: tempo
-            ) {
-                emit(.phraseCompleted(phrase))
-            }
+            ), emit: emit)
         }
-        if case .completed(let phrase)? = phraseSegmenter.flush(at: time, tempo: tempo) {
-            emit(.phraseCompleted(phrase))
+        emitMelodic(phraseSegmenter.flush(at: time, tempo: tempo), emit: emit)
+    }
+
+    private func emitMelodic(_ event: PhraseSegmenter.Event?, emit: (AnalysisEvent) -> Void) {
+        switch event {
+        case .completed(let phrase): emit(.phraseCompleted(phrase))
+        case .discarded(let reason): emit(.phraseDiscarded(reason))
+        case .progress, nil: break
         }
     }
 
     private func flushRhythmic(at time: TimeInterval, emit: (AnalysisEvent) -> Void) {
-        if case .completed(let phrase)? = rhythmSegmenter.flush(at: time) {
+        switch rhythmSegmenter.flush(at: time) {
+        case .completed(let phrase):
             emit(.phraseCompleted(RhythmSegmenter.withBeatStrengths(phrase, tempo: tempoEstimator.current)))
+        case .discarded(let reason):
+            emit(.phraseDiscarded(reason))
+        case .progress, nil:
+            break
         }
     }
 }
