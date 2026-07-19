@@ -29,3 +29,9 @@ struct FakePermissionChecking: PermissionChecking {
     func currentMicPermission() async -> MicPermission { .granted }
     func requestMicPermission() async -> MicPermission { .granted }
 }
+
+struct FakeSparkProviding: SparkProviding {
+    func sparks(for spec: PhraseSpec, memory: SessionMemory) -> WordSparks {
+        WordSparks(images: ["ember", "hollow", "drifting", "unspoken"], rhymes: ["flame", "name", "same"])
+    }
+}

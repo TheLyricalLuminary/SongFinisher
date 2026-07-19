@@ -14,6 +14,7 @@ struct AppServices: Sendable {
     let analyzer: any MelodyAnalyzing
     let prosody: any ProsodyDeriving
     let lyrics: any LyricProviding
+    let sparks: any SparkProviding
     let ranker: any CandidateRanking
     let permissions: any PermissionChecking
 
@@ -27,6 +28,7 @@ struct AppServices: Sendable {
             analyzer: MelodyAnalyzer(),
             prosody: DefaultProsodyDeriver(),
             lyrics: bestAvailableLyricProvider(),
+            sparks: try! LexiconSparkProvider.bundled(),
             ranker: Domain.CandidateRanker(),
             permissions: MicPermissionService()
         )
@@ -51,12 +53,13 @@ struct AppServices: Sendable {
         analyzer: any MelodyAnalyzing = FakeMelodyAnalyzing(),
         prosody: any ProsodyDeriving = DefaultProsodyDeriver(),
         lyrics: any LyricProviding = FakeLyricProvider(),
+        sparks: any SparkProviding = FakeSparkProviding(),
         ranker: any CandidateRanking = Domain.CandidateRanker(),
         permissions: any PermissionChecking = FakePermissionChecking()
     ) -> AppServices {
         AppServices(
             capture: capture, analyzer: analyzer, prosody: prosody,
-            lyrics: lyrics, ranker: ranker, permissions: permissions
+            lyrics: lyrics, sparks: sparks, ranker: ranker, permissions: permissions
         )
     }
 }

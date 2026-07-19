@@ -70,6 +70,10 @@ struct SessionView: View {
                         onDifferentEmotion: { viewModel.differentEmotion($0) },
                         onAdjustSyllables: { viewModel.adjustSyllableTarget(by: $0) }
                     )
+
+                    if let sparks = viewModel.currentSparks, !sparks.isEmpty {
+                        SparksView(sparks: sparks)
+                    }
                 }
 
                 AcceptedLinesStrip(lines: viewModel.sessionMemory.acceptedLines)
@@ -320,6 +324,46 @@ private struct AcceptedLinesStrip: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The honest offline offering: not a finished line, but raw material. Strong words
+/// that fit the phrase's feeling and beat, and rhymes for the last accepted line — the
+/// songwriter writes the line. A word-level generator can't guarantee meaning, so this
+/// gives real, usable vocabulary instead of a metrically-correct nonsense sentence.
+private struct SparksView: View {
+    let sparks: WordSparks
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !sparks.images.isEmpty {
+                chipSection(title: "WORDS THAT FIT", words: sparks.images, tint: .accentColor)
+            }
+            if !sparks.rhymes.isEmpty {
+                chipSection(title: "RHYMES WITH YOUR LAST LINE", words: sparks.rhymes, tint: .secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func chipSection(title: String, words: [String], tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(words, id: \.self) { word in
+                        Text(word)
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(tint.opacity(0.12), in: Capsule())
+                            .foregroundStyle(tint == .secondary ? Color.secondary : tint)
+                    }
+                }
+            }
         }
     }
 }

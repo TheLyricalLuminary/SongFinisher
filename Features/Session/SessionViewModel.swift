@@ -41,6 +41,9 @@ final class SessionViewModel {
     private(set) var currentPhrase: Phrase?
     private(set) var currentSpec: PhraseSpec?
     private(set) var rankedCandidates: [RankedCandidate] = []
+    /// Evocative words + rhymes for the current phrase — the songwriter's raw material
+    /// when the generated line isn't the one. Resolved locally and instantly.
+    private(set) var currentSparks: WordSparks?
     private(set) var generationError: String?
     private(set) var sessionMemory = SessionMemory()
 
@@ -88,6 +91,7 @@ final class SessionViewModel {
         currentPhrase = nil
         currentSpec = nil
         rankedCandidates = []
+        currentSparks = nil
         generationError = nil
     }
 
@@ -167,6 +171,10 @@ final class SessionViewModel {
         generationTask?.cancel()
         state = .analyzingPhrase
         let spec = services.prosody.spec(for: phrase, tempo: currentTempo, memoryHints: sessionMemory, density: density)
+        // Sparks are a local lexicon lookup, not a generation request — resolve them
+        // synchronously so the songwriter always has material even while (or if) the
+        // line generator produces something weak.
+        currentSparks = services.sparks.sparks(for: spec, memory: sessionMemory)
         generationTask = Task { [weak self] in await self?.generate(spec: spec) }
     }
 
@@ -225,6 +233,7 @@ final class SessionViewModel {
         currentPhrase = nil
         currentSpec = nil
         rankedCandidates = []
+        currentSparks = nil
         generationError = nil
         state = .listening
     }
