@@ -23,9 +23,45 @@ public struct PhraseAssembler: Sendable {
     static let candidatesPerSlot = 24    // top-Zipf slice examined per slot expansion
     static let fastNoteMs = 180
 
+    /// Function words that must never fill a *content* slot (noun / plural noun /
+    /// verb / adjective / adverb). The Moby POS data tags many of these with a content
+    /// category too — "a" is tagged a noun (the letter, the grade, the note), "your" an
+    /// adjective — and because they are the highest-frequency words in English they sit
+    /// at the top of every Zipf-sorted bucket. Without this guard the beam fills a noun
+    /// slot with "a" and an adjective slot with a determiner, collapsing a "lyric" into
+    /// word salad like "during your several a". Closed-class literals in templates
+    /// (subjects, articles, enders) are unaffected — only open-class POS slots filter.
+    static let contentSlotStopWords: Set<String> = [
+        "a", "a's", "an", "the", "and", "or", "but", "nor", "so", "yet",
+        "of", "to", "in", "on", "at", "by", "for", "with", "as", "than", "then",
+        "is", "was", "are", "were", "am", "be", "been", "being",
+        "do", "does", "did", "done", "has", "have", "had", "having",
+        "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+        "i", "you", "he", "she", "we", "they", "it", "me", "him", "us", "them",
+        "my", "your", "his", "her", "its", "our", "their",
+        "mine", "yours", "ours", "theirs", "hers", "myself", "yourself",
+        "this", "that", "these", "those", "who", "whom", "whose", "which", "what",
+        "not", "no", "if", "there", "here", "such", "very", "too",
+    ]
+
     public init(store: LexiconStore, index: StressPatternIndex) {
         self.store = store
         self.index = index
+    }
+
+    /// A slot category is "content" when it carries lexical stress and meaning
+    /// (noun/verb/adjective/adverb) rather than being a closed-class function word.
+    static func isContentCategory(_ category: POSCategory) -> Bool {
+        !category.isDisjoint(with: .contentWord)
+    }
+
+    /// A finished line is only offered if it carries at least one real content word and
+    /// does not end on a bare function word. A line ending on "a" or "your" reads as
+    /// broken no matter how well its stress aligns.
+    static func isAcceptable(_ line: AssembledLine) -> Bool {
+        guard !line.contentWords.isEmpty else { return false }
+        guard let last = line.text.split(separator: " ").last else { return false }
+        return !contentSlotStopWords.contains(String(last).lowercased())
     }
 
     /// Generates a pool of scored lines for `syllableTarget` syllables against the
@@ -59,7 +95,7 @@ public struct PhraseAssembler: Sendable {
                 targetValence: targetValence,
                 rng: &rng
             )
-            for line in lines where seenTexts.insert(line.text).inserted {
+            for line in lines where Self.isAcceptable(line) && seenTexts.insert(line.text).inserted {
                 pool.append(line)
             }
         }
@@ -133,15 +169,20 @@ public struct PhraseAssembler: Sendable {
         }
     }
 
-    private func expansions(for slot: SlotSpec, rng: inout SeededRandom) -> [LexiconStore.Entry] {
+    func expansions(for slot: SlotSpec, rng: inout SeededRandom) -> [LexiconStore.Entry] {
         switch slot {
         case .oneOf(let literals):
             return literals.compactMap(resolveLiteral)
         case .pos(let category):
+            let filterStopWords = Self.isContentCategory(category)
             var out: [LexiconStore.Entry] = []
             for syllables in 1...4 {
                 let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: 4, rng: &rng)
-                for id in ids { out.append(store[Int(id)]) }
+                for id in ids {
+                    let entry = store[Int(id)]
+                    if filterStopWords, Self.contentSlotStopWords.contains(entry.text) { continue }
+                    out.append(entry)
+                }
             }
             return out
         }

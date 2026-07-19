@@ -79,6 +79,36 @@ import Domain
         #expect(poolA.map(\.text) != poolB.map(\.text))
     }
 
+    @Test("no candidate is word salad: real content, never ends on a function word",
+          arguments: [3, 4, 5, 6, 7, 8, 9, 10, 12])
+    func candidatesAreNeverFunctionWordSalad(syllables: Int) {
+        // Regression for "during your several a": function words leaking into content
+        // slots and lines ending on a bare article. Every offered line must carry a
+        // content word and must not end on a stop word, across seeds and lengths.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: seed, poolTarget: 60)
+            for line in pool {
+                #expect(!line.contentWords.isEmpty, "'\(line.text)' has no content word")
+                let last = line.text.split(separator: " ").last.map { String($0).lowercased() } ?? ""
+                #expect(!PhraseAssembler.contentSlotStopWords.contains(last),
+                        "'\(line.text)' ends on the function word '\(last)'")
+            }
+        }
+    }
+
+    @Test func contentSlotsRejectHighFrequencyFunctionWords() {
+        // The direct mechanism: expanding a noun slot must not surface "a"/"the",
+        // even though the lexicon tags them as nouns and ranks them top by frequency.
+        var rng = SeededRandom(seed: 1)
+        let nounEntries = Fixtures.assembler.expansions(for: .pos(.noun), rng: &rng)
+        let surfaced = Set(nounEntries.map(\.text))
+        #expect(!surfaced.contains("a"))
+        #expect(!surfaced.contains("the"))
+        #expect(!surfaced.contains("your"))
+    }
+
     @Test func fastNoteConsonantClusterIsPenalized() {
         // A synthetic check on the scoring function directly: a low positional score
         // component for cluster-heavy entries on fast slots is exercised end-to-end by
