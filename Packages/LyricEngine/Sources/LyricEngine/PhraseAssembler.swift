@@ -21,6 +21,14 @@ public struct PhraseAssembler: Sendable {
 
     static let beamWidth = 12
     static let candidatesPerSlot = 24    // top-Zipf slice examined per slot expansion
+    /// Random picks drawn from *beyond* the top-Zipf head of each bucket, so evocative
+    /// mid- and lower-frequency words reach the beam instead of only the most common
+    /// (and most clichéd) ones sitting at the top.
+    static let extraReach = 12
+    /// The Zipf value scored as most "evocative": common enough to sing, uncommon
+    /// enough not to be worn out ("the", "get", "thing"). Both very common and obscure
+    /// words score below this.
+    static let evocativePeak = 3.8
     static let fastNoteMs = 180
 
     /// Function words that must never fill a *content* slot (noun / plural noun /
@@ -177,7 +185,7 @@ public struct PhraseAssembler: Sendable {
             let filterStopWords = Self.isContentCategory(category)
             var out: [LexiconStore.Entry] = []
             for syllables in 1...4 {
-                let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: 4, rng: &rng)
+                let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: Self.extraReach, rng: &rng)
                 for id in ids {
                     let entry = store[Int(id)]
                     if filterStopWords, Self.contentSlotStopWords.contains(entry.text) { continue }
@@ -258,8 +266,12 @@ public struct PhraseAssembler: Sendable {
             }
         }
 
-        // Frequency prior and a whisper of seeded jitter for tie-break variety.
-        score += min(0.3, max(0, (entry.zipf - 2.5) * 0.1))
+        // Prefer evocative, mid-frequency vocabulary over the most common (and most
+        // clichéd) words: a word at `evocativePeak` scores best; both worn-out common
+        // words and obscure ones score lower. This replaces a prior term that rewarded
+        // raw commonness — the source of generic, cliché word choices. Plus a whisper
+        // of seeded jitter for tie-break variety.
+        score += max(0, 0.3 - abs(entry.zipf - Self.evocativePeak) * 0.15)
         score += Double(rng.next() % 100) / 2000.0
         return score
     }
