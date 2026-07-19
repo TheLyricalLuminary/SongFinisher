@@ -7,14 +7,23 @@ on:
   workflow_dispatch:
 
 jobs:
-  package-tests:
-    runs-on: macos-15
+  # Pure-Swift packages build and test on Linux. Linux runners bill at 1x and are
+  # available on private repos, so this actually runs (the previous macOS-only
+  # workflow failed to start on every push). Covers the lyric logic that ships to
+  # every device regardless of Apple Intelligence: the syllable counter, ranker,
+  # and the offline assembler including the function-word-salad guard.
+  #
+  # MelodyKit (AVFoundation/Accelerate) and the app target need macOS + Xcode and
+  # are validated locally until macOS runners are enabled for the account.
+  linux-logic-tests:
+    runs-on: ubuntu-latest
+    container: swift:6.0
     steps:
       - uses: actions/checkout@v4
-      - name: Run package test suites
+      - name: Test Domain and LyricEngine
         run: |
           set -euo pipefail
-          for p in Domain MelodyKit LyricEngine PersistenceKit; do
+          for p in Domain LyricEngine; do
             echo "── swift test: $p ──"
             swift test --package-path "Packages/$p"
           done
