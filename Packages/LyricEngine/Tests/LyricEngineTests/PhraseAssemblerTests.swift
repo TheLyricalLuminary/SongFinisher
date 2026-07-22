@@ -98,6 +98,40 @@ import Domain
         }
     }
 
+    @Test("no candidate repeats the same word twice",
+          arguments: [3, 4, 5, 6, 7, 8, 9, 10, 12])
+    func candidatesNeverRepeatAWord(syllables: Int) {
+        // Regression: two POS slots of the same category in one template (the
+        // noun-"and"-noun frame is the reachable case) can beam-search their way to the
+        // same top-Zipf entry for both slots, producing self-duplicate lines like
+        // "night and night alone" that read as broken as any word-salad line.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: seed, poolTarget: 60)
+            for line in pool {
+                let words = line.text.split(separator: " ").map { String($0).lowercased() }
+                #expect(Set(words).count == words.count, "'\(line.text)' repeats a word")
+            }
+        }
+    }
+
+    @Test func contentWordsExcludeStopWordsEvenWhenTheLexiconMistagsThem() {
+        // Regression: `finalize()` used to add a word to `contentWords` from its raw
+        // lexicon POS bits alone, so a mistagged function word (the lexicon tags "a" as
+        // a noun — see contentSlotStopWords' doc comment) could satisfy "has a real
+        // content word" all by itself, defeating `isAcceptable`'s guard from the inside
+        // even though the word itself is filtered out of every content POS slot.
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: 5, stress: "SwSwS")
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: 5, seed: seed, poolTarget: 60)
+            for line in pool {
+                #expect(line.contentWords.isDisjoint(with: PhraseAssembler.contentSlotStopWords),
+                        "'\(line.text)' counts a stop word as content: \(line.contentWords)")
+            }
+        }
+    }
+
     @Test func contentSlotsRejectHighFrequencyFunctionWords() {
         // The direct mechanism: expanding a noun slot must not surface "a"/"the",
         // even though the lexicon tags them as nouns and ranks them top by frequency.

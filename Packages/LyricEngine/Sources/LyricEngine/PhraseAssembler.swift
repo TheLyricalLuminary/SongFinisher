@@ -63,13 +63,17 @@ public struct PhraseAssembler: Sendable {
         !category.isDisjoint(with: .contentWord)
     }
 
-    /// A finished line is only offered if it carries at least one real content word and
-    /// does not end on a bare function word. A line ending on "a" or "your" reads as
-    /// broken no matter how well its stress aligns.
+    /// A finished line is only offered if it carries at least one real content word,
+    /// does not end on a bare function word, and never repeats the same word twice —
+    /// two POS slots of the same category in one template (e.g. the noun-and-noun
+    /// frame) can otherwise beam-search their way to the same top-Zipf entry for both
+    /// slots ("night and night alone"), which reads as broken as any word salad.
     static func isAcceptable(_ line: AssembledLine) -> Bool {
         guard !line.contentWords.isEmpty else { return false }
-        guard let last = line.text.split(separator: " ").last else { return false }
-        return !contentSlotStopWords.contains(String(last).lowercased())
+        let words = line.text.split(separator: " ").map { String($0).lowercased() }
+        guard let last = words.last else { return false }
+        guard !contentSlotStopWords.contains(last) else { return false }
+        return Set(words).count == words.count
     }
 
     /// Generates a pool of scored lines for `syllableTarget` syllables against the
@@ -284,7 +288,11 @@ public struct PhraseAssembler: Sendable {
         var zipfSum = 0.0
 
         for entry in state.entries {
-            let isContent = !entry.pos.isDisjoint(with: .contentWord)
+            // Raw lexicon POS bits alone aren't trustworthy here: the same mistagging
+            // that made "a" rank as a noun (see contentSlotStopWords' doc comment) would
+            // otherwise let a bare function word count as the line's one required
+            // "real content" word, defeating the isAcceptable guard from the inside.
+            let isContent = !entry.pos.isDisjoint(with: .contentWord) && !Self.contentSlotStopWords.contains(entry.text)
             for j in 0..<entry.syllables {
                 stressPattern.append(entry.isStressed(syllable: j) ? .strong : .weak)
             }
