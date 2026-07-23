@@ -243,6 +243,44 @@ EXCLUDED = {
     "bastard", "asshole", "ass", "asses",
 }
 
+
+TRIGGER_STATES = {
+    "joyful_release": {
+        "breathe","open","light","air","sky","wide","clear","free","loose","expand",
+        "finally","away","rise","fly","lift","home","safe","found","whole","settled",
+        "arrived","won","standing","alive","survived","soft","warm","held","quiet","resting",
+    },
+    "heartbreak_hold": {
+        "quiet","still","empty","hollow","cold","frozen","flat","dim",
+        "gone","missing","space","lost","hold","wait","alone","inside",
+        "heavy","ache","numb","slow","tight","sinking","stone","low","pressed",
+        "black","dead","stripped",
+    },
+    "tension_spiral": {
+        "faster","louder","higher","harder","rising","building","climbing",
+        "tighter","closer","pushing","pulling","breaking","cracking","walls","weight",
+        "again","quick","burn","crash","snap","shatter","fall","splinter","collapse",
+        "watch","creep","dark","breathe","stop","help","please",
+    },
+    "hope_return": {
+        "maybe","almost","barely","softer","brighter","lighter","warmer","dawn",
+        "crack","edge","find","start","turning","waking","beginning",
+        "small","slow","careful","first","new","gentle","emerging","faint","thread","learning",
+    },
+    "final_resolve": {
+        "finished","complete","whole","end","final","closed","know","true","real",
+        "clear","certain","sure","honest","rest","peace","still","calm","home",
+        "settled","quiet","forever","earned","claimed","released","survived","standing","won",
+    },
+}
+EMOTION_STATE = {
+    "joy": "joyful_release", "release": "joyful_release",
+    "melancholy": "heartbreak_hold", "longing": "heartbreak_hold", "nostalgia": "heartbreak_hold",
+    "tension": "tension_spiral", "hope": "hope_return", "reflection": "final_resolve",
+}
+def trigger_words(emotion):
+    return TRIGGER_STATES[EMOTION_STATE[emotion]]
+
 EMOTION_VALENCE = {
     "joy": 3.0, "hope": 2.5, "release": 1.5, "nostalgia": -0.5,
     "reflection": -0.25, "longing": -1.0, "tension": -1.5, "melancholy": -2.5,
@@ -288,7 +326,9 @@ class Assembler:
         pattern = pad(spec["pattern"], target)
         long_slots = set(spec.get("long_slots", ()))
         durations = spec.get("durations", [400] * target)
-        tv = EMOTION_VALENCE[spec.get("override") or spec["emotion"]]
+        emo = spec.get("override") or spec["emotion"]
+        tv = EMOTION_VALENCE[emo]
+        trig = trigger_words(emo) if self.fixed else frozenset()
         rng = SeededRandom(seed)
         templates = [t for t in self.templates if t[1] <= target <= t[2]]
         swift_shuffle(templates, rng)
@@ -296,7 +336,7 @@ class Assembler:
         for slots, _, _ in templates:
             if len(pool) >= pool_target:
                 break
-            for line in self.fill(slots, pattern, long_slots, durations, tv, rng):
+            for line in self.fill(slots, pattern, long_slots, durations, tv, trig, rng):
                 if self.is_acceptable(line) and line.text not in seen:
                     seen.add(line.text)
                     pool.append(line)
@@ -346,7 +386,7 @@ class Assembler:
         return Entry(-1, literal.lower(), syllables, stress, openb, 0,
                      zipf, valence / len(words), cluster, last.rhyme)
 
-    def position_score(self, e, p, pattern, long_slots, durations, rng):
+    def position_score(self, e, p, pattern, long_slots, durations, trig, rng):
         score = 0.0
         for j in range(e.syllables):
             slot = p + j
@@ -365,10 +405,12 @@ class Assembler:
         score += max(0.0, 0.3 - abs(e.zipf - EVOCATIVE_PEAK) * 0.15)
         if self.fixed and (e.pos & CONTENT):
             score += min(0.25, abs(e.valence) * 0.15)
+        if e.text in trig and (e.pos & CONTENT) and e.text not in STOP_WORDS:
+            score += 0.25
         score += (rng.next() % 100) / 2000.0
         return score
 
-    def fill(self, slots, pattern, long_slots, durations, tv, rng):
+    def fill(self, slots, pattern, long_slots, durations, tv, trig, rng):
         n = len(pattern)
         beam = [(0, 0, (), 0.0)]   # slotIndex, syllablePosition, entries, score
         completed = []
@@ -386,7 +428,7 @@ class Assembler:
                 for e in self.expansions(slots[si], rng):
                     if e.syllables > rem_syll - (rem_slots - 1):
                         continue
-                    s = self.position_score(e, sp, pattern, long_slots, durations, rng)
+                    s = self.position_score(e, sp, pattern, long_slots, durations, trig, rng)
                     nxt.append((si + 1, sp + e.syllables, entries + (e,), sc + s))
             nxt.sort(key=lambda t: -t[3])
             del nxt[BEAM_WIDTH * 4:]

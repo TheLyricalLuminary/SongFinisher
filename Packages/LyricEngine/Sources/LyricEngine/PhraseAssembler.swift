@@ -110,6 +110,8 @@ public struct PhraseAssembler: Sendable {
         let pattern = padded(spec.budget.stressMap.pattern, to: syllableTarget)
         let longSlots = Set(spec.longNoteSlots)
         let targetValence = Self.targetValence(for: spec)
+        let emotion = spec.requestedEmotionOverride ?? spec.topEmotions.first?.emotion ?? .reflection
+        let triggerWords = TriggerWordBank.words(for: emotion)
 
         var rng = SeededRandom(seed: seed)
         var templates = TemplateBank.all.filter {
@@ -128,6 +130,7 @@ public struct PhraseAssembler: Sendable {
                 longSlots: longSlots,
                 durations: spec.noteDurationsMs,
                 targetValence: targetValence,
+                triggerWords: triggerWords,
                 rng: &rng
             )
             for line in lines where isAcceptable(line) && seenTexts.insert(line.text).inserted {
@@ -152,6 +155,7 @@ public struct PhraseAssembler: Sendable {
         longSlots: Set<Int>,
         durations: [Int],
         targetValence: Double,
+        triggerWords: Set<String> = [],
         rng: inout SeededRandom
     ) -> [AssembledLine] {
         let n = pattern.count
@@ -177,6 +181,7 @@ public struct PhraseAssembler: Sendable {
                         pattern: pattern,
                         longSlots: longSlots,
                         durations: durations,
+                        triggerWords: triggerWords,
                         rng: &rng
                     )
                     var advanced = state
@@ -288,6 +293,7 @@ public struct PhraseAssembler: Sendable {
         pattern: [Stress],
         longSlots: Set<Int>,
         durations: [Int],
+        triggerWords: Set<String> = [],
         rng: inout SeededRandom
     ) -> Double {
         var score = 0.0
@@ -326,6 +332,16 @@ public struct PhraseAssembler: Sendable {
         // score; magnitude alone is rewarded here.
         if !entry.pos.isDisjoint(with: .contentWord) {
             score += min(0.25, abs(entry.valence) * 0.15)
+        }
+        // Curated beats statistical: content words from the book's Trigger Word
+        // Library for the phrase's emotional state ("The Song Finisher", Emotional
+        // State Engineering) get a lexical bonus on top of the valence term. Kept
+        // below the stress-fit weights so the meter still rules, and content-only so
+        // a trigger word's fringe POS tag can't drag it into the wrong slot.
+        if triggerWords.contains(entry.text),
+           !entry.pos.isDisjoint(with: .contentWord),
+           !Self.contentSlotStopWords.contains(entry.text) {
+            score += 0.25
         }
         score += Double(rng.next() % 100) / 2000.0
         return score
