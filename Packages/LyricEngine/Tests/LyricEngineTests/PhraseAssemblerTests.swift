@@ -116,6 +116,44 @@ import Domain
         }
     }
 
+    @Test("determiner agreement: no 'a' before a vowel, no singular determiner before a plural",
+          arguments: [4, 5, 6, 7, 8])
+    func candidatesRespectDeterminerAgreement(syllables: Int) {
+        // Regression for "there's a arch clause" and "rely a knives" — both reachable
+        // because Moby's noun tags cover vowel-initial and plural forms alike.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: seed, poolTarget: 60)
+            for line in pool {
+                let words = line.text.split(separator: " ").map { String($0).lowercased() }
+                for (word, next) in zip(words, words.dropFirst()) {
+                    if word == "a", let first = next.first {
+                        #expect(!"aeiou".contains(first), "'\(line.text)' has 'a' before a vowel")
+                    }
+                    if ["a", "an", "this", "that"].contains(word), next.hasSuffix("s"),
+                       let entry = Fixtures.store.lookup(next) {
+                        #expect(!entry.pos.contains(.pluralNoun),
+                                "'\(line.text)' pairs '\(word)' with plural '\(next)'")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func bareVerbSlotsRejectInflectedForms() {
+        // Regression for "I upgrading a bore" / "we'll escaped the goose": Moby tags
+        // participles and past forms as verbs, but every template subject and modal
+        // pairs with the base form. Multi-syllable -ing/-ed forms must not surface;
+        // monosyllables ("sing", "need") are genuine base verbs and stay.
+        var rng = SeededRandom(seed: 1)
+        let verbs = Fixtures.assembler.expansions(for: .pos(.verb), rng: &rng)
+        for entry in verbs where entry.syllables >= 2 {
+            #expect(!entry.text.hasSuffix("ing") && !entry.text.hasSuffix("ed"),
+                    "verb slot surfaced inflected form '\(entry.text)'")
+        }
+    }
+
     @Test func contentWordsExcludeStopWordsEvenWhenTheLexiconMistagsThem() {
         // Regression: `finalize()` used to add a word to `contentWords` from its raw
         // lexicon POS bits alone, so a mistagged function word (the lexicon tags "a" as
@@ -141,6 +179,30 @@ import Domain
         #expect(!surfaced.contains("a"))
         #expect(!surfaced.contains("the"))
         #expect(!surfaced.contains("your"))
+        // Nor single letters (Moby tags "l" a noun) or profanity — never auto-suggested.
+        for text in surfaced {
+            #expect(text.count > 1, "noun slot surfaced single letter '\(text)'")
+            #expect(!PhraseAssembler.excludedContentWords.contains(text),
+                    "noun slot surfaced excluded word '\(text)'")
+        }
+    }
+
+    @Test func prepositionSlotsRejectArticlesAndSkipTheRandomReach() {
+        // Regression for "half a your cans" / "his eruption a this dye": Moby tags the
+        // articles as prepositions too, so a preposition slot could draw "a". And the
+        // beyond-the-head random reach — meant to surface evocative *content* words —
+        // was dredging up obscure prepositions ("sur", "atop", "fore"). A function-word
+        // slot must serve only the common head of its bucket, articles excluded.
+        var rngA = SeededRandom(seed: 1)
+        var rngB = SeededRandom(seed: 999)
+        let a = Fixtures.assembler.expansions(for: .pos(.preposition), rng: &rngA)
+        let b = Fixtures.assembler.expansions(for: .pos(.preposition), rng: &rngB)
+        for entry in a {
+            #expect(!entry.pos.contains(.article),
+                    "preposition slot surfaced the article-tagged '\(entry.text)'")
+        }
+        // No random reach: the expansion must be identical regardless of RNG state.
+        #expect(a.map(\.index) == b.map(\.index))
     }
 
     @Test func fastNoteConsonantClusterIsPenalized() {

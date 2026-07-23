@@ -52,6 +52,17 @@ public struct PhraseAssembler: Sendable {
         "not", "no", "if", "there", "here", "such", "very", "too",
     ]
 
+    /// Never auto-suggested in a lyric line. Strictly profanity — emotionally dark
+    /// vocabulary ("sin", "curse", "damned") stays, since dark songs need it. Without
+    /// this, the valence-charged scoring below actively seeks these out for
+    /// negative-emotion phrases (VADER scores them strongly), and "i dimension a piss"
+    /// is not a suggestion; the songwriter can always type what they mean.
+    static let excludedContentWords: Set<String> = [
+        "piss", "pissed", "shit", "shitty", "fuck", "fucked", "fucking",
+        "cum", "cock", "dick", "tits", "whore", "slut", "bitch", "bitches",
+        "bastard", "asshole", "ass", "asses",
+    ]
+
     public init(store: LexiconStore, index: StressPatternIndex) {
         self.store = store
         self.index = index
@@ -68,12 +79,24 @@ public struct PhraseAssembler: Sendable {
     /// two POS slots of the same category in one template (e.g. the noun-and-noun
     /// frame) can otherwise beam-search their way to the same top-Zipf entry for both
     /// slots ("night and night alone"), which reads as broken as any word salad.
-    static func isAcceptable(_ line: AssembledLine) -> Bool {
+    /// Adjacent-pair grammar is also enforced: "a" never precedes a vowel-initial
+    /// word ("a arch clause") and a singular determiner never precedes a plural
+    /// ("rely a knives") — both reachable because Moby's noun tags cover plurals.
+    func isAcceptable(_ line: AssembledLine) -> Bool {
         guard !line.contentWords.isEmpty else { return false }
         let words = line.text.split(separator: " ").map { String($0).lowercased() }
         guard let last = words.last else { return false }
-        guard !contentSlotStopWords.contains(last) else { return false }
-        return Set(words).count == words.count
+        guard !Self.contentSlotStopWords.contains(last) else { return false }
+        guard Set(words).count == words.count else { return false }
+
+        for (word, next) in zip(words, words.dropFirst()) {
+            if word == "a", let first = next.first, "aeiou".contains(first) { return false }
+            if ["a", "an", "this", "that"].contains(word), next.hasSuffix("s"),
+               let entry = store.lookup(next), entry.pos.contains(.pluralNoun) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Generates a pool of scored lines for `syllableTarget` syllables against the
@@ -107,7 +130,7 @@ public struct PhraseAssembler: Sendable {
                 targetValence: targetValence,
                 rng: &rng
             )
-            for line in lines where Self.isAcceptable(line) && seenTexts.insert(line.text).inserted {
+            for line in lines where isAcceptable(line) && seenTexts.insert(line.text).inserted {
                 pool.append(line)
             }
         }
@@ -186,13 +209,32 @@ public struct PhraseAssembler: Sendable {
         case .oneOf(let literals):
             return literals.compactMap(resolveLiteral)
         case .pos(let category):
-            let filterStopWords = Self.isContentCategory(category)
+            let isContent = Self.isContentCategory(category)
+            // The beyond-the-head random reach exists to surface evocative mid-frequency
+            // *content* vocabulary. For function-word slots (preposition, conjunction)
+            // it instead dredges up "sur"/"atop"/"fore"-grade obscurities that wreck a
+            // line's fluency — there, only the common head of the bucket is wanted.
+            let reach = isContent ? Self.extraReach : 0
             var out: [LexiconStore.Entry] = []
             for syllables in 1...4 {
-                let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: Self.extraReach, rng: &rng)
+                let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: reach, rng: &rng)
                 for id in ids {
                     let entry = store[Int(id)]
-                    if filterStopWords, Self.contentSlotStopWords.contains(entry.text) { continue }
+                    if isContent, Self.contentSlotStopWords.contains(entry.text) { continue }
+                    // Single letters carry noun tags in Moby ("l" the letter) and read
+                    // as typos in a lyric; profanity is never auto-suggested.
+                    if isContent, entry.text.count == 1 || Self.excludedContentWords.contains(entry.text) { continue }
+                    // Moby also tags the articles as prepositions, so without this a
+                    // preposition slot happily takes "a" — "half a your cans". An
+                    // article-tagged word never belongs in a non-article POS slot.
+                    if !category.contains(.article), entry.pos.contains(.article) { continue }
+                    // Bare-verb slots: Moby tags participles and past forms as verbs
+                    // too, but every template subject and modal pairs with the base
+                    // form — "I upgrading a bore", "we'll escaped the goose". Multi-
+                    // syllable verbs ending -ing/-ed are inflected forms; the
+                    // monosyllables ("sing", "need") are genuine base verbs.
+                    if category.contains(.verb), entry.syllables >= 2,
+                       entry.text.hasSuffix("ing") || entry.text.hasSuffix("ed") { continue }
                     out.append(entry)
                 }
             }
@@ -276,6 +318,15 @@ public struct PhraseAssembler: Sendable {
         // raw commonness — the source of generic, cliché word choices. Plus a whisper
         // of seeded jitter for tie-break variety.
         score += max(0, 0.3 - abs(entry.zipf - Self.evocativePeak) * 0.15)
+        // Mid-frequency alone isn't evocative — "gram" and "flux" sit in the same
+        // Zipf band as "thrill" and "grace". The VADER valence already in the lexicon
+        // separates them: emotionally charged content words get a modest boost, so
+        // lines lean on words that carry feeling rather than merely fitting meter.
+        // Direction (positive/negative) is still handled by the line-level emotion
+        // score; magnitude alone is rewarded here.
+        if !entry.pos.isDisjoint(with: .contentWord) {
+            score += min(0.25, abs(entry.valence) * 0.15)
+        }
         score += Double(rng.next() % 100) / 2000.0
         return score
     }

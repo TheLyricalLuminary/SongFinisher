@@ -19,7 +19,11 @@ struct LyricTemplate: Sendable {
 /// frames × a 35K-word lexicon gives enormous variety. Literals are deliberately
 /// common, singable function words.
 enum TemplateBank {
-    static let subjects = ["I", "you", "we", "they", "she", "he"]
+    /// Subjects that pair with a bare-form verb slot. "she"/"he" are deliberately
+    /// absent: the lexicon's verb bucket serves base forms ("she provision…" reads
+    /// broken), so third-person singular subjects only appear in templates whose
+    /// copula is pinned to agree.
+    static let subjects = ["I", "you", "we", "they"]
     static let articles = ["the", "a", "this", "that", "my", "your", "our", "her", "his"]
     static let enders = ["again", "tonight", "away", "alone", "somehow", "for now", "at last", "inside"]
         // "for now"/"at last" are two words but fixed — counted via lexicon at build.
@@ -38,8 +42,12 @@ enum TemplateBank {
         templates.append([.oneOf(["I'll", "you'll", "we'll"]), .pos(.verb), .oneOf(articles), .pos(.noun)])
         templates.append([.oneOf(["don't", "can't", "won't"]), .pos(.verb), .oneOf(articles), .pos(.noun)])
 
-        // Noun-led images.
-        templates.append([.oneOf(articles), .pos(.noun), .pos(.verb), .oneOf(enders)])
+        // Noun-led images. The subject of the verb-carrying frame is *plural* on
+        // purpose: the open verb slot serves base forms (see the -ing/-ed filter in
+        // PhraseAssembler.expansions), and a plural subject agrees with the base form
+        // by construction — "the nights burn again", never "the heart break again".
+        templates.append([.oneOf(["the", "my", "your", "our", "her", "his", "these", "those"]),
+                          .pos(.pluralNoun), .pos(.verb), .oneOf(enders)])
         templates.append([.oneOf(articles), .pos(.noun), .pos(.preposition), .oneOf(articles), .pos(.noun)])
         templates.append([.pos(.adjective), .pos(.noun), .pos(.preposition), .oneOf(articles), .pos(.noun)])
         templates.append([.oneOf(articles), .pos(.adjective), .pos(.noun)])
@@ -58,9 +66,13 @@ enum TemplateBank {
         templates.append([.pos(.preposition), .oneOf(articles), .pos(.adjective), .pos(.noun)])
         templates.append([.pos(.preposition), .pos(.pluralNoun), .oneOf(["and"]), .pos(.pluralNoun)])
 
-        // Copular / descriptive.
+        // Copular / descriptive. Subject and copula are split into agreement-consistent
+        // groups — one free slot for each would let the beam pair "you" with "was",
+        // and grammar breaks read worse than any bland word choice.
         templates.append([.oneOf(articles), .pos(.noun), .oneOf(["is", "was"]), .pos(.adjective)])
-        templates.append([.oneOf(subjects), .oneOf(["was", "were", "am", "are"]), .pos(.adverb), .pos(.adjective)])
+        templates.append([.oneOf(["I"]), .oneOf(["am", "was"]), .pos(.adverb), .pos(.adjective)])
+        templates.append([.oneOf(["you", "we", "they"]), .oneOf(["are", "were"]), .pos(.adverb), .pos(.adjective)])
+        templates.append([.oneOf(["she", "he"]), .oneOf(["is", "was"]), .pos(.adverb), .pos(.adjective)])
         templates.append([.oneOf(["it's", "there's"]), .oneOf(articles), .pos(.adjective), .pos(.noun)])
 
         return templates.map { slots in
