@@ -5,6 +5,7 @@ import Foundation
 public enum AnalysisEvent: Sendable, Equatable {
     case pitch(PitchFrame)
     case tempoUpdated(TempoEstimate)
+    case chordUpdated(ChordEstimate)
     case phraseInProgress(start: TimeInterval, provisionalNotes: Int)
     case phraseCompleted(Phrase)
 }

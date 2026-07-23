@@ -15,6 +15,7 @@ final class AnalysisChain {
     private let pitchDetector = YINPitchDetector()
     private let onsetDetector = SpectralFluxOnsetDetector()
     private let tempoEstimator = TempoEstimator()
+    private let chordDetector = ChordDetector()
     private let noteSegmenter = NoteSegmenter()
     private let phraseSegmenter = PhraseSegmenter()
 
@@ -65,6 +66,7 @@ final class AnalysisChain {
         pitchDetector.reset()
         onsetDetector.reset()
         tempoEstimator.reset()
+        chordDetector.reset()
         noteSegmenter.reset()
         phraseSegmenter.reset()
         pending.removeAll()
@@ -85,6 +87,13 @@ final class AnalysisChain {
         let energyOnset = onsetDetector.process(window: window)
         if let tempo = tempoEstimator.ingest(fluxValue: onsetDetector.latestFlux, time: time) {
             emit(.tempoUpdated(tempo))
+        }
+
+        // Only the tail hop is new since the previous (hopSize-shifted) window — the chord
+        // detector keeps its own longer history, so feeding the whole window would
+        // double-count the overlap.
+        if let chord = chordDetector.ingest(hopSamples: Array(window.suffix(Self.hopSize))) {
+            emit(.chordUpdated(chord))
         }
 
         let closedNote = noteSegmenter.ingest(frame: frame, energyOnset: energyOnset)

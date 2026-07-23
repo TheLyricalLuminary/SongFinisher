@@ -14,6 +14,10 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
     public let phraseDuration: TimeInterval
     public let requestedEmotionOverride: Emotion?
     public let variationSeedText: String?
+    /// The chord sounding under this phrase, if the harmony detector had a reliable read
+    /// (see `ChordDetector` in MelodyKit). Nil for instrument-less/unpitched-accompaniment
+    /// sessions — harmony is a bonus signal, not a requirement.
+    public let chord: ChordEstimate?
 
     public init(
         phraseID: UUID,
@@ -26,7 +30,8 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
         longNoteSlots: [Int],
         phraseDuration: TimeInterval,
         requestedEmotionOverride: Emotion? = nil,
-        variationSeedText: String? = nil
+        variationSeedText: String? = nil,
+        chord: ChordEstimate? = nil
     ) {
         self.phraseID = phraseID
         self.budget = budget
@@ -39,6 +44,7 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
         self.phraseDuration = phraseDuration
         self.requestedEmotionOverride = requestedEmotionOverride
         self.variationSeedText = variationSeedText
+        self.chord = chord
     }
 
     /// Top-3 emotions, sorted, as sent to the AI layer.
@@ -50,7 +56,7 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
             phraseID: phraseID, budget: budget, emotions: emotions,
             tempoBPM: tempoBPM, tempoConfidence: tempoConfidence, contourShape: contourShape,
             noteDurationsMs: noteDurationsMs, longNoteSlots: longNoteSlots, phraseDuration: phraseDuration,
-            requestedEmotionOverride: requestedEmotionOverride, variationSeedText: text
+            requestedEmotionOverride: requestedEmotionOverride, variationSeedText: text, chord: chord
         )
     }
 
@@ -60,7 +66,7 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
             phraseID: phraseID, budget: budget, emotions: emotions,
             tempoBPM: tempoBPM, tempoConfidence: tempoConfidence, contourShape: contourShape,
             noteDurationsMs: noteDurationsMs, longNoteSlots: longNoteSlots, phraseDuration: phraseDuration,
-            requestedEmotionOverride: emotion, variationSeedText: variationSeedText
+            requestedEmotionOverride: emotion, variationSeedText: variationSeedText, chord: chord
         )
     }
 
@@ -73,7 +79,7 @@ public struct PhraseSpec: Sendable, Equatable, Codable {
             phraseID: phraseID, budget: adjustedBudget, emotions: emotions,
             tempoBPM: tempoBPM, tempoConfidence: tempoConfidence, contourShape: contourShape,
             noteDurationsMs: noteDurationsMs, longNoteSlots: longNoteSlots, phraseDuration: phraseDuration,
-            requestedEmotionOverride: requestedEmotionOverride, variationSeedText: variationSeedText
+            requestedEmotionOverride: requestedEmotionOverride, variationSeedText: variationSeedText, chord: chord
         )
     }
 }

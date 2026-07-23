@@ -17,7 +17,7 @@ public struct DefaultProsodyDeriver: ProsodyDeriving, Sendable {
         EmotionFeatureScorer.classify(EmotionFeatureScorer.features(for: phrase, tempo: tempo))
     }
 
-    public func spec(for phrase: Phrase, tempo: TempoEstimate?, memoryHints: SessionMemory) -> PhraseSpec {
+    public func spec(for phrase: Phrase, tempo: TempoEstimate?, memoryHints: SessionMemory, chord: ChordEstimate?) -> PhraseSpec {
         let budget = syllableBudget(for: phrase, tempo: tempo)
         let notes = phrase.syllableBearingNotes
         let durationsMs = notes.map { Int(($0.duration * 1000).rounded()) }
@@ -31,16 +31,22 @@ public struct DefaultProsodyDeriver: ProsodyDeriving, Sendable {
             longSlots = notes.indices.filter { notes[$0].duration >= median * Self.longNoteRatio }
         }
 
+        let emotions = EmotionFeatureScorer.classify(
+            EmotionFeatureScorer.features(for: phrase, tempo: tempo),
+            chord: chord
+        )
+
         return PhraseSpec(
             phraseID: phrase.id,
             budget: budget,
-            emotions: emotions(for: phrase, tempo: tempo),
+            emotions: emotions,
             tempoBPM: tempo?.bpm ?? 0,
             tempoConfidence: tempo?.confidence ?? 0,
             contourShape: Self.contourShape(for: phrase),
             noteDurationsMs: durationsMs,
             longNoteSlots: longSlots,
-            phraseDuration: phrase.duration
+            phraseDuration: phrase.duration,
+            chord: chord
         )
     }
 

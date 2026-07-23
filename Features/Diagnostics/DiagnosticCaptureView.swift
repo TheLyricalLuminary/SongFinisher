@@ -86,6 +86,11 @@ struct DiagnosticCaptureView: View {
                 metric("PHRASES", "\(viewModel.completedPhraseCount)")
             }
             GridRow {
+                metric("CHORD", chordText)
+                metric("CH.CONF", String(format: "%.2f", viewModel.chord?.confidence ?? 0))
+                Text("")
+            }
+            GridRow {
                 Text("AMPLITUDE").font(.caption2).foregroundStyle(Self.dim)
                 amplitudeBar
                     .gridCellColumns(2)
@@ -138,6 +143,11 @@ struct DiagnosticCaptureView: View {
     private var tempoText: String {
         guard let bpm = viewModel.tempoBPM, viewModel.tempoConfidence > 0.35 else { return "—" }
         return String(format: "%.0f BPM", bpm)
+    }
+
+    private var chordText: String {
+        guard let chord = viewModel.chord, chord.isReliable else { return "—" }
+        return chord.displayName
     }
 
     private var controls: some View {

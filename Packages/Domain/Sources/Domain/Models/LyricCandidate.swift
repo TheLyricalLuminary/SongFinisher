@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ProviderKind: String, Sendable, Equatable, Codable {
-    case claude, offline
+    case claude, offline, onDevice
 }
 
 /// LLM self-reported scores on the two genuinely subjective axes. Never trusted for the

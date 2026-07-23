@@ -40,6 +40,23 @@ enum TestSignals {
         440.0 * pow(2.0, (midi - 69.0) / 12.0)
     }
 
+    /// A chord: simultaneous pure tones summed sample-by-sample. Deliberately pure sine
+    /// (no harmonics) so the chroma detector sees only the exact chord tones — no
+    /// overtone-series contamination to muddy the ground truth (docs/ARCHITECTURE.md §11).
+    /// A lower per-note amplitude than `tone()`'s default keeps the summed peak well under
+    /// clipping even for 4-note chords.
+    static func chord(midiNotes: [Double], duration: TimeInterval, amplitude: Float = 0.2) -> [Float] {
+        let count = Int(duration * sampleRate)
+        var out = [Float](repeating: 0, count: count)
+        for midi in midiNotes {
+            let tone = tone(frequency: frequency(midi: midi), duration: duration, amplitude: amplitude)
+            for i in 0..<min(count, tone.count) {
+                out[i] += tone[i]
+            }
+        }
+        return out
+    }
+
     /// A tone with sinusoidal vibrato: rate in Hz, extent in cents (± around center).
     /// Phase-continuous so the vibrato itself introduces no spectral-flux attacks.
     static func vibratoTone(
@@ -89,5 +106,8 @@ extension Array where Element == AnalysisEvent {
     }
     var tempoUpdates: [TempoEstimate] {
         compactMap { if case .tempoUpdated(let t) = $0 { t } else { nil } }
+    }
+    var chordUpdates: [ChordEstimate] {
+        compactMap { if case .chordUpdated(let c) = $0 { c } else { nil } }
     }
 }
