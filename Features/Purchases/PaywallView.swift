@@ -163,12 +163,15 @@ private struct ProductButton: View {
 
     private var periodLabel: String {
         guard let period = product.subscription?.subscriptionPeriod else { return "One-time purchase" }
+        // The guard makes this body two statements, so the switch is not an implicit
+        // return — without explicit returns its case literals are discarded and the
+        // getter falls off the end ("missing return" + five unused-literal warnings).
         switch period.unit {
-        case .month: "per month, cancel anytime"
-        case .year: "per year, cancel anytime"
-        case .week: "per week, cancel anytime"
-        case .day: "per day, cancel anytime"
-        @unknown default: "subscription"
+        case .month: return "per month, cancel anytime"
+        case .year: return "per year, cancel anytime"
+        case .week: return "per week, cancel anytime"
+        case .day: return "per day, cancel anytime"
+        @unknown default: return "subscription"
         }
     }
 }
