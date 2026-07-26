@@ -26,6 +26,41 @@ private func makeLine(_ text: String, stress: String = "Sw", emotion: Emotion = 
         #expect(all.first?.lines.isEmpty == true)
     }
 
+    @Test func removeLineDropsItAndRedensifiesOrder() async throws {
+        // Flow mode keeps lines without asking, so undo has to actually remove the row —
+        // not just the in-memory copy — or the song sheet keeps a line the writer rejected.
+        let store = try SongStore.inMemory()
+        let song = try await store.createSong(title: "Undo Test")
+        let first = makeLine("the first line")
+        let second = makeLine("the second line")
+        let third = makeLine("the third line")
+        for line in [first, second, third] {
+            try await store.append(line: line, to: song.id)
+        }
+
+        try await store.removeLine(id: second.id, from: song.id)
+
+        let lines = try await store.fetchSongs().first?.lines ?? []
+        #expect(lines.map(\.text) == ["the first line", "the third line"])
+
+        // A later append must land at the end, which only holds if sort indices were
+        // re-densified after the removal.
+        let fourth = makeLine("the fourth line")
+        try await store.append(line: fourth, to: song.id)
+        let after = try await store.fetchSongs().first?.lines ?? []
+        #expect(after.map(\.text) == ["the first line", "the third line", "the fourth line"])
+    }
+
+    @Test func removingAnUnknownLineIsANoOp() async throws {
+        let store = try SongStore.inMemory()
+        let song = try await store.createSong(title: "No-op Test")
+        try await store.append(line: makeLine("kept"), to: song.id)
+
+        try await store.removeLine(id: UUID(), from: song.id)
+
+        #expect(try await store.fetchSongs().first?.lines.count == 1)
+    }
+
     @Test func appendedLinesPersistInOrder() async throws {
         let store = try SongStore.inMemory()
         let song = try await store.createSong(title: "Order Test")

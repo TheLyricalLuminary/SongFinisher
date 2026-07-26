@@ -51,6 +51,24 @@ public actor SongStore: SongStoring {
         try modelContext.save()
     }
 
+    /// Removes one accepted line. Flow mode keeps lines automatically, so taking one
+    /// back has to be possible without ending the session — otherwise an automatic keep
+    /// would be destructive. Sort indices are re-densified so a later append still lands
+    /// at the end.
+    public func removeLine(id: UUID, from songID: UUID) async throws {
+        guard let sd = try fetchSD(songID) else { throw SongStoreError.notFound }
+        guard sd.lines.contains(where: { $0.id == id }) else { return }
+        for line in sd.lines where line.id == id {
+            modelContext.delete(line)
+        }
+        let survivors = sd.lines.filter { $0.id != id }.sorted { $0.sortIndex < $1.sortIndex }
+        for (index, line) in survivors.enumerated() {
+            line.sortIndex = index
+        }
+        sd.updatedAt = Date()
+        try modelContext.save()
+    }
+
     public func updateMemory(_ memory: SessionMemory, songID: UUID) async throws {
         guard let sd = try fetchSD(songID) else { throw SongStoreError.notFound }
         sd.memoryData = try Self.encode(memory)
