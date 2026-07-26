@@ -170,7 +170,7 @@ balked. Entirely behind `#if canImport(FoundationModels)`, so older SDKs compile
 **Tier 2 — `OfflineLyricProvider`** (everywhere else, and the universal fallback). Pure
 constraint satisfaction, no model:
 
-- A **35k-word bundled lexicon** (`lexicon.bin`, ~894 KB, memory-mapped, custom "SFLX v1"
+- A **35,346-word bundled lexicon** (`lexicon.bin`, 894 KB, memory-mapped, custom "SFLX v1"
   binary format) built by `tools/build_lexicon.py` from CMUdict (syllables, stress, vowel
   openness, rhyme keys), Moby POS (part-of-speech bitsets), wordfreq (Zipf frequency), and VADER
   (valence). Licences are documented in `ACKNOWLEDGEMENTS.md`; deliberately-excluded sources
@@ -238,7 +238,7 @@ invariant in the codebase: *the model is never the judge of objective constraint
 - In-session memory (accepted lines, rejections, dominant emotion).
 - A `DiagnosticCaptureView` DSP debug tool, reachable from a toolbar button.
 - iOS and macOS app targets.
-- ~165 test cases across the four packages.
+- 164 test cases across the four packages, plus one app-target smoke test.
 
 ### Designed in `docs/ARCHITECTURE.md` but NOT built
 
@@ -260,6 +260,23 @@ Do not assume these exist:
   exist as fields and are read by scorers, but nothing populates them during a session.
 - Live Activity / Dynamic Island, Siri / App Intents, iPad support, and any purchase or
   subscription code.
+
+### Known spec drift
+
+Where `docs/ARCHITECTURE.md` and the source disagree on a tuned constant, **the source is the
+truth** — the spec was written before tuning. One confirmed instance:
+
+- **YIN voicing hysteresis.** §8 of the architecture doc says "enter > 0.88, exit < 0.80
+  confidence". The code gates on CMND rather than confidence, and since
+  `confidence = 1 − cmnd`, `YINPitchDetector.voicedCMNDCutoff = 0.20` /
+  `unvoicedCMNDCutoff = 0.35` means the real behaviour is **enter above 0.80, exit below 0.65**.
+  Do not "correct" the code to match the doc.
+
+Other DSP constants cited in this brief were checked against the source and do agree: phrase
+boundaries (350 ms silence, 1.5× cadence note + 150 ms, 12 s cap, 700 ms / 2-note minimum), YIN
+(1024-sample window, 65–1047 Hz, 0.15 threshold, 5-frame median), tempo (8 s window re-evaluated
+every 2 s, 60–200 BPM, 105 BPM prior, 0.35 reliability gate), and polyphony (enter ≥ 50%, exit
+≤ 15%, 50-frame vote window ≈ 0.5 s).
 
 ### Verification status — important
 
