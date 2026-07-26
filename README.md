@@ -7,7 +7,10 @@ suggestions that match its rhythm, syllable count, stress pattern, and emotional
 character — live, phrase by phrase.
 
 - **Platform:** iOS 17+, Swift 6, SwiftUI, MVVM
-- **Architecture:** see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Orientation:** [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) — what this is, who it's for,
+  and what is built vs. only designed. Start here (and hand this one to an AI assistant).
+- **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the design contract, which
+  describes the intended end state, not the current inventory.
 
 ## Project layout
 
