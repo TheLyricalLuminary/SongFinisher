@@ -96,6 +96,16 @@ def parse_moby_pos(path):
             if "\\" not in line:
                 continue
             word, codes = line.rsplit("\\", 1)
+            # A capitalized Moby headword is a proper noun ("Riley\N", "Bahrain\N").
+            # Lowercasing those used to merge their tags into the common-word entry,
+            # flooding the noun buckets with names/places the assembler then drops
+            # into lyric lines ("there's the hindu fade", "my bahrain a my lang").
+            # POS tags must come from common-word (lowercase) headwords only; a word
+            # that is both ("Rose"/"rose") still gets tags from its lowercase line.
+            # Capitalized-only words can still be admitted tagless via the
+            # NO_POS_MIN_ZIPF path, which template literals rely on ("I", "I'll").
+            if word[:1].isupper():
+                continue
             word = word.lower()
             bits = 0
             for c in codes:
