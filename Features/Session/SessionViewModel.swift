@@ -40,6 +40,18 @@ final class SessionViewModel {
     /// for the rest of the session (going Pro mid-session clears it via the next check).
     private(set) var didHitFreeLimit = false
 
+    /// Lock and move (the method from "The Song Finisher", as an app mode): with flow
+    /// mode on, playing the next phrase keeps the current top line instead of discarding
+    /// it. Taking your hands off the instrument to tap [Use] is what breaks a flow state,
+    /// and a phrase boundary is a gesture the writer already performs — so the app reads
+    /// "I played on" as "I'll take it" and leaves curation for the song sheet afterward.
+    /// Persisted: a writer who works this way always works this way.
+    var isFlowMode: Bool {
+        didSet { UserDefaults.standard.set(isFlowMode, forKey: Self.flowModeKey) }
+    }
+
+    private static let flowModeKey = "session.flowMode"
+
     static let energyHistoryCapacity = 150
     static let uiUpdateInterval: TimeInterval = 1.0 / 30.0
 
@@ -69,6 +81,7 @@ final class SessionViewModel {
         self.songTitle = songTitle ?? "New Song"
         self.sessionMemory = initialMemory
         self.gating = gating
+        self.isFlowMode = UserDefaults.standard.bool(forKey: Self.flowModeKey)
     }
 
     func start() {
@@ -176,6 +189,15 @@ final class SessionViewModel {
 
     private func handlePhraseCompleted(_ phrase: Phrase) {
         liveNoteCountInPhrase = 0
+        // Lock and move: the finished phrase's best line is kept rather than silently
+        // dropped, so playing on *is* accepting. Runs before `currentSpec` is replaced —
+        // the line being committed belongs to the phrase that just ended, not this one.
+        if isFlowMode, let top = rankedCandidates.first {
+            commitAccepted(top)
+            // Clear immediately: `generate` only empties this after an actor hop, and a
+            // second phrase landing in that window would commit the same line twice.
+            rankedCandidates = []
+        }
         generationTask?.cancel()
         state = .analyzingPhrase
         updateLiveActivity(phase: .analyzing)
@@ -254,6 +276,21 @@ final class SessionViewModel {
 
     /// No API call: append the line, fold its emotion into memory, go back to listening.
     func use(_ ranked: RankedCandidate) {
+        guard currentSpec != nil else { return }
+        commitAccepted(ranked)
+        generationTask?.cancel()
+        generationTask = nil
+        currentSpec = nil
+        rankedCandidates = []
+        generationError = nil
+        state = .listening
+        updateLiveActivity(phase: .listening)
+    }
+
+    /// Appends a line to the session's accepted set and persists it. Shared by the
+    /// explicit [Use] tap and flow mode's automatic keep, so both paths record a line
+    /// identically — only the surrounding state handling differs.
+    private func commitAccepted(_ ranked: RankedCandidate) {
         guard let spec = currentSpec else { return }
         let emotion = spec.topEmotions.first?.emotion ?? sessionMemory.dominantEmotion ?? .reflection
         let line = LyricLine(
@@ -266,13 +303,31 @@ final class SessionViewModel {
         sessionMemory.acceptedLines.append(line)
         sessionMemory.dominantEmotion = emotion
         persistAcceptedLine(line)
-        generationTask?.cancel()
-        generationTask = nil
-        currentSpec = nil
-        rankedCandidates = []
-        generationError = nil
-        state = .listening
-        updateLiveActivity(phase: .listening)
+    }
+
+    /// Takes back the most recently kept line without interrupting capture — the safety
+    /// net that keeps flow mode's automatic keeping non-destructive. Bound to a keyboard
+    /// shortcut so it works from a foot pedal mid-take.
+    func undoLastAccepted() {
+        guard let removed = sessionMemory.acceptedLines.popLast() else { return }
+        sessionMemory.dominantEmotion = sessionMemory.acceptedLines.last?.emotion
+        if let songID {
+            let store = services.store
+            let memorySnapshot = sessionMemory
+            Task {
+                try? await store.removeLine(id: removed.id, from: songID)
+                try? await store.updateMemory(memorySnapshot, songID: songID)
+            }
+        }
+        updateLiveActivity(phase: currentActivityPhase)
+    }
+
+    private var currentActivityPhase: SessionActivityPhase {
+        switch state {
+        case .analyzingPhrase: .analyzing
+        case .suggesting: .suggesting
+        default: .listening
+        }
     }
 
     private func updateLiveActivity(phase: SessionActivityPhase) {

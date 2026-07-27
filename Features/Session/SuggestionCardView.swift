@@ -53,6 +53,7 @@ struct SuggestionCardView: View {
                 Image(systemName: "chevron.left")
             }
             .disabled(current == 0)
+            .keyboardShortcut(.leftArrow, modifiers: [])
             .accessibilityLabel("Previous suggestion")
 
             ForEach(0..<count, id: \.self) { i in
@@ -66,6 +67,7 @@ struct SuggestionCardView: View {
                 Image(systemName: "chevron.right")
             }
             .disabled(current == count - 1)
+            .keyboardShortcut(.rightArrow, modifiers: [])
             .accessibilityLabel("Next suggestion")
         }
         .buttonStyle(.plain)
@@ -190,17 +192,24 @@ struct SuggestionCardView: View {
 
     private func controls(for ranked: RankedCandidate) -> some View {
         HStack(spacing: 10) {
+            // Keyboard shortcuts exist so hands never leave the instrument: Bluetooth
+            // page-turner pedals (AirTurn, PageFlip — hardware guitarists already own)
+            // present as HID keyboards sending exactly these keys, so binding them here
+            // makes the whole card foot-operable for free, with no pairing code of ours.
             Button("Use") { onUse(ranked) }
                 .buttonStyle(.borderedProminent)
-                .accessibilityHint("Adds this line to your song and returns to listening")
+                .keyboardShortcut(.space, modifiers: [])
+                .accessibilityHint("Adds this line to your song and returns to listening. Shortcut: space")
 
             Button("More Like This") { onMoreLikeThis(ranked) }
                 .buttonStyle(.bordered)
-                .accessibilityHint("Requests new lines close to this one's imagery")
+                .keyboardShortcut("m", modifiers: [])
+                .accessibilityHint("Requests new lines close to this one's imagery. Shortcut: M")
 
             Button("Regenerate") { onRegenerate() }
                 .buttonStyle(.bordered)
-                .accessibilityHint("Replaces these suggestions with fresh ones")
+                .keyboardShortcut("r", modifiers: [])
+                .accessibilityHint("Replaces these suggestions with fresh ones. Shortcut: R")
 
             Menu("Different Emotion") {
                 ForEach(Emotion.allCases, id: \.self) { emotion in

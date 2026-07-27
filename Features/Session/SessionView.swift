@@ -68,6 +68,12 @@ struct SessionView: View {
                     )
                 }
 
+                FlowModeRow(
+                    isOn: $viewModel.isFlowMode,
+                    canUndo: !viewModel.sessionMemory.acceptedLines.isEmpty,
+                    onUndo: { viewModel.undoLastAccepted() }
+                )
+
                 if viewModel.didHitFreeLimit, let proStore, !proStore.isPro {
                     freeLimitBanner
                 }
@@ -161,6 +167,46 @@ struct SessionView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Flow mode's control strip. The toggle is the only new decision the writer makes, and
+/// they make it once — everything after that is hands-free: keep by playing on, undo by
+/// tapping a pedal. The undo button carries a keyboard shortcut so it is reachable from a
+/// pedal even though it is visually secondary.
+private struct FlowModeRow: View {
+    @Binding var isOn: Bool
+    let canUndo: Bool
+    let onUndo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Toggle(isOn: $isOn) {
+                HStack(spacing: 6) {
+                    Image(systemName: isOn ? "figure.walk.motion" : "hand.tap")
+                    Text("Flow mode")
+                        .font(.footnote.weight(.medium))
+                }
+            }
+            .toggleStyle(.switch)
+            .fixedSize()
+            .accessibilityHint("When on, playing the next phrase keeps the current line automatically, so you never stop playing to accept one")
+
+            Spacer()
+
+            Button {
+                onUndo()
+            } label: {
+                Label("Undo keep", systemImage: "arrow.uturn.backward")
+                    .font(.footnote)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canUndo)
+            .keyboardShortcut("u", modifiers: [])
+            .accessibilityHint("Removes the most recently kept line. Shortcut: U")
+        }
+        .padding(.horizontal, 2)
     }
 }
 
