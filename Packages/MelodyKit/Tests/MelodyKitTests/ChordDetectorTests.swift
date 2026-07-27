@@ -9,7 +9,7 @@ import Domain
 @Suite struct ChordDetectorTests {
 
     @Test func detectsSustainedCMajorTriad() {
-        let samples = TestSignals.chord(midiNotes: [60, 64, 67], duration: 2.0)  // C E G
+        let samples = TestSignals.pureToneChord(midiNotes: [60, 64, 67], duration: 2.0)  // C E G
         let chords = TestSignals.analyze(samples).chordUpdates
         guard let last = chords.last else {
             Issue.record("no chord estimate produced")
@@ -21,7 +21,7 @@ import Domain
     }
 
     @Test func detectsSustainedAMinorTriad() {
-        let samples = TestSignals.chord(midiNotes: [57, 60, 64], duration: 2.0)  // A C E
+        let samples = TestSignals.pureToneChord(midiNotes: [57, 60, 64], duration: 2.0)  // A C E
         let chords = TestSignals.analyze(samples).chordUpdates
         guard let last = chords.last else {
             Issue.record("no chord estimate produced")
@@ -33,7 +33,7 @@ import Domain
     }
 
     @Test func detectsSustainedGDominant7() {
-        let samples = TestSignals.chord(midiNotes: [55, 59, 62, 65], duration: 2.0)  // G B D F
+        let samples = TestSignals.pureToneChord(midiNotes: [55, 59, 62, 65], duration: 2.0)  // G B D F
         let chords = TestSignals.analyze(samples).chordUpdates
         guard let last = chords.last else {
             Issue.record("no chord estimate produced")
@@ -45,7 +45,7 @@ import Domain
     }
 
     @Test func detectsSustainedBDiminishedTriad() {
-        let samples = TestSignals.chord(midiNotes: [59, 62, 65], duration: 2.0)  // B D F
+        let samples = TestSignals.pureToneChord(midiNotes: [59, 62, 65], duration: 2.0)  // B D F
         let chords = TestSignals.analyze(samples).chordUpdates
         guard let last = chords.last else {
             Issue.record("no chord estimate produced")
@@ -64,7 +64,7 @@ import Domain
 
     @Test func resetClearsPendingChordState() {
         let detector = ChordDetector()
-        let chordSamples = TestSignals.chord(midiNotes: [60, 64, 67], duration: 1.0)
+        let chordSamples = TestSignals.pureToneChord(midiNotes: [60, 64, 67], duration: 1.0)
         var produced = false
         // Feed hop-sized chunks the way AnalysisChain does.
         var offset = 0

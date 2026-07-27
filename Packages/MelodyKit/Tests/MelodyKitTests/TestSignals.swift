@@ -44,8 +44,10 @@ enum TestSignals {
     /// (no harmonics) so the chroma detector sees only the exact chord tones — no
     /// overtone-series contamination to muddy the ground truth (docs/ARCHITECTURE.md §11).
     /// A lower per-note amplitude than `tone()`'s default keeps the summed peak well under
-    /// clipping even for 4-note chords.
-    static func chord(midiNotes: [Double], duration: TimeInterval, amplitude: Float = 0.2) -> [Float] {
+    /// clipping even for 4-note chords. Distinct from `chord()` below: `ChordDetector`
+    /// (chroma matching) needs exact ground truth, while `PolyphonyDetector` needs a
+    /// realistic spectrum — the two tests' fixtures have opposite requirements.
+    static func pureToneChord(midiNotes: [Double], duration: TimeInterval, amplitude: Float = 0.2) -> [Float] {
         let count = Int(duration * sampleRate)
         var out = [Float](repeating: 0, count: count)
         for midi in midiNotes {
@@ -53,6 +55,56 @@ enum TestSignals {
             for i in 0..<min(count, tone.count) {
                 out[i] += tone[i]
             }
+        }
+        return out
+    }
+
+    /// A chord: simultaneous voices under a shared attack/release envelope, per-voice
+    /// amplitude normalized so the sum never clips. Each voice carries three harmonic
+    /// partials (1×, 2× at half, 3× at quarter amplitude) — a pluck-ish timbre. Pure
+    /// sines would be an unrealistically hard case for spectral peak analysis: low
+    /// guitar strings sit ~2.6 FFT bins apart and their windowed main lobes merge,
+    /// which real string harmonics (spread far up the spectrum) never suffer from.
+    /// Used by `strummedChord` below for the polyphony/rhythm-routing tests.
+    static func chord(midiNotes: [Double], duration: TimeInterval, amplitude: Float = 0.5) -> [Float] {
+        let count = Int(duration * sampleRate)
+        let attack = min(count / 8, 160)
+        let release = min(count / 8, 160)
+        let partials: [(multiple: Double, level: Float)] = [(1, 1.0), (2, 0.5), (3, 0.25)]
+        let perVoice = amplitude / (Float(max(1, midiNotes.count)) * 1.75)
+        var out = [Float](repeating: 0, count: count)
+        for midi in midiNotes {
+            let f = frequency(midi: midi)
+            for partial in partials {
+                let pf = f * partial.multiple
+                guard pf < sampleRate / 2 else { continue }
+                for i in 0..<count {
+                    let phase = 2.0 * Double.pi * pf * Double(i) / sampleRate
+                    out[i] += perVoice * partial.level * Float(sin(phase))
+                }
+            }
+        }
+        for i in 0..<count {
+            var env: Float = 1
+            if i < attack { env = Float(i) / Float(max(1, attack)) }
+            if i >= count - release { env = Float(count - i) / Float(max(1, release)) }
+            out[i] *= env
+        }
+        return out
+    }
+
+    /// A strummed progression: the same chord re-articulated `strums` times with short
+    /// articulation gaps, like steady down-strums on a guitar.
+    static func strummedChord(
+        midiNotes: [Double],
+        strums: Int,
+        strumDuration: TimeInterval = 0.45,
+        gap: TimeInterval = 0.05
+    ) -> [Float] {
+        var out: [Float] = []
+        for _ in 0..<strums {
+            out.append(contentsOf: chord(midiNotes: midiNotes, duration: strumDuration))
+            out.append(contentsOf: silence(duration: gap))
         }
         return out
     }
@@ -109,5 +161,8 @@ extension Array where Element == AnalysisEvent {
     }
     var chordUpdates: [ChordEstimate] {
         compactMap { if case .chordUpdated(let c) = $0 { c } else { nil } }
+    }
+    var inputModeChanges: [InputMode] {
+        compactMap { if case .inputModeChanged(let m) = $0 { m } else { nil } }
     }
 }

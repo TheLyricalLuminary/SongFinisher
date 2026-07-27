@@ -34,6 +34,12 @@ struct SessionView: View {
         viewModel.state == .analyzingPhrase || viewModel.state == .suggesting
     }
 
+    /// Chords carry no melody line to count syllables from, so the singer picks how
+    /// many syllables per strum they intend to sing. Only shown when it can matter.
+    private var showsDensityPicker: Bool {
+        viewModel.inputMode == .rhythmic || viewModel.currentPhrase?.isRhythmOnly == true
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -53,6 +59,9 @@ struct SessionView: View {
                     ChordBadge(chord: viewModel.currentChord)
                     ConfidenceDot(confidence: viewModel.currentConfidence)
                     Spacer()
+                    if viewModel.inputMode == .rhythmic {
+                        RhythmBadge()
+                    }
                 }
 
                 WaveformView(energyHistory: viewModel.energyHistory, isVoiced: viewModel.isVoiced)
@@ -78,6 +87,10 @@ struct SessionView: View {
                     freeLimitBanner
                 }
 
+                if showsDensityPicker {
+                    DensityPicker(density: viewModel.density, onChange: { viewModel.setDensity($0) })
+                }
+
                 if showsFinalStressPattern {
                     SuggestionCardView(
                         ranked: viewModel.rankedCandidates,
@@ -87,6 +100,10 @@ struct SessionView: View {
                         onDifferentEmotion: { viewModel.differentEmotion($0) },
                         onAdjustSyllables: { viewModel.adjustSyllableTarget(by: $0) }
                     )
+
+                    if let sparks = viewModel.currentSparks, !sparks.isEmpty {
+                        SparksView(sparks: sparks)
+                    }
                 }
 
                 AcceptedLinesStrip(lines: viewModel.sessionMemory.acceptedLines)
@@ -406,6 +423,42 @@ private struct ConfidenceDot: View {
     }
 }
 
+/// Shown when the DSP chain has classified the input as strummed chords rather than
+/// a single melodic line — YIN pitch tracking is meaningless there, so the syllable
+/// budget comes from the onset grid instead (see `DensityPicker` below).
+private struct RhythmBadge: View {
+    var body: some View {
+        Label("Rhythm", systemImage: "waveform.path")
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.thinMaterial, in: Capsule())
+            .accessibilityLabel("Rhythm mode: hearing strummed chords")
+    }
+}
+
+/// Sparse/medium/dense selector for strummed input: chords carry no melody line to
+/// count syllables from, so the singer states how many syllables per strum they
+/// intend to sing, and the onset grid supplies the accents.
+private struct DensityPicker: View {
+    let density: SyllableDensity
+    let onChange: (SyllableDensity) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("SYLLABLES PER STRUM")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            Picker("Syllables per strum", selection: Binding(get: { density }, set: onChange)) {
+                ForEach(SyllableDensity.allCases, id: \.self) { option in
+                    Text(option.rawValue.capitalized).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+}
+
 /// "●○●○○●○" per docs/ARCHITECTURE.md §6: while a phrase is being sung/played, dots grow
 /// one at a time with no stress info yet (we don't know the final map until the phrase
 /// ends); once it completes, the dots snap to the real S/w pattern for that phrase.
@@ -480,6 +533,46 @@ private struct AcceptedLinesStrip: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Accepted lines")
             .accessibilityValue(lines.suffix(3).map(\.text).joined(separator: ". "))
+        }
+    }
+}
+
+/// The honest offline offering: not a finished line, but raw material. Strong words
+/// that fit the phrase's feeling and beat, and rhymes for the last accepted line — the
+/// songwriter writes the line. A word-level generator can't guarantee meaning, so this
+/// gives real, usable vocabulary instead of a metrically-correct nonsense sentence.
+private struct SparksView: View {
+    let sparks: WordSparks
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !sparks.images.isEmpty {
+                chipSection(title: "WORDS THAT FIT", words: sparks.images, tint: .accentColor)
+            }
+            if !sparks.rhymes.isEmpty {
+                chipSection(title: "RHYMES WITH YOUR LAST LINE", words: sparks.rhymes, tint: .secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func chipSection(title: String, words: [String], tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(words, id: \.self) { word in
+                        Text(word)
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(tint.opacity(0.12), in: Capsule())
+                            .foregroundStyle(tint == .secondary ? Color.secondary : tint)
+                    }
+                }
+            }
         }
     }
 }

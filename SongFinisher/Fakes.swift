@@ -74,5 +74,18 @@ actor FakeSongStore: SongStoring {
         songs[songID] = nil
     }
 
+    func removeLine(id: UUID, from songID: UUID) async throws {
+        guard var song = songs[songID] else { throw FakeStoreError.notFound }
+        song.lines.removeAll { $0.id == id }
+        song.updatedAt = Date()
+        songs[songID] = song
+    }
+
     enum FakeStoreError: Error { case notFound }
+}
+
+struct FakeSparkProviding: SparkProviding {
+    func sparks(for spec: PhraseSpec, memory: SessionMemory) -> WordSparks {
+        WordSparks(images: ["ember", "hollow", "drifting", "unspoken"], rhymes: ["flame", "name", "same"])
+    }
 }

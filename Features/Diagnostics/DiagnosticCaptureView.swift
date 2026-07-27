@@ -100,6 +100,13 @@ struct DiagnosticCaptureView: View {
                 Text("\(viewModel.liveNoteCountInPhrase)")
                     .font(.system(.body, design: .monospaced, weight: .bold))
                     .foregroundStyle(onsetFlash ? Self.accent : Self.fg)
+                metric("MODE", viewModel.inputMode == .rhythmic ? "RHYTHMIC" : "MELODIC")
+            }
+            GridRow {
+                Text("DISCARDED").font(.caption2).foregroundStyle(Self.dim)
+                Text(discardText)
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(viewModel.discardedPhraseCount > 0 ? .red : Self.fg)
                     .gridCellColumns(2)
             }
         }
@@ -148,6 +155,20 @@ struct DiagnosticCaptureView: View {
     private var chordText: String {
         guard let chord = viewModel.chord, chord.isReliable else { return "—" }
         return chord.displayName
+    }
+
+    /// Distinguishes the two ways PHRASES can sit at 0: boundaries that never fire
+    /// show 0 here too; boundaries that fire but fail a discard rule tick this up
+    /// with the rule that rejected them.
+    private var discardText: String {
+        guard viewModel.discardedPhraseCount > 0 else { return "0" }
+        let reason: String
+        switch viewModel.lastDiscardReason {
+        case .tooFewNotes: reason = "TOO FEW NOTES"
+        case .tooShort: reason = "TOO SHORT"
+        case nil: reason = ""
+        }
+        return "\(viewModel.discardedPhraseCount)  last: \(reason)"
     }
 
     private var controls: some View {
@@ -221,7 +242,8 @@ struct DiagnosticCaptureView: View {
         let phrase = String(format: "p%02d", entry.phraseIndex)
         let onset = String(format: "onset=%6.2fs", entry.onset)
         let duration = String(format: "dur=%4dms", Int(entry.duration * 1000))
-        let note = DiagnosticFormatting.noteName(midi: entry.midiNote).padding(toLength: 6, withPad: " ", startingAt: 0)
+        let note = (entry.isRhythm ? "STRUM" : DiagnosticFormatting.noteName(midi: entry.midiNote))
+            .padding(toLength: 6, withPad: " ", startingAt: 0)
         let melisma = entry.isMelisma ? "MEL" : ""
         return Text("\(phrase)  \(onset)  \(duration)  \(note) \(melisma)")
             .font(.caption2)

@@ -24,6 +24,8 @@ final class DiagnosticCaptureViewModel {
         let duration: TimeInterval
         let midiNote: Double
         let isMelisma: Bool
+        /// From a rhythm-only phrase: `midiNote` is a placeholder, render as a strum.
+        var isRhythm = false
     }
 
     private(set) var state: CaptureState = .idle
@@ -37,7 +39,10 @@ final class DiagnosticCaptureViewModel {
     private(set) var chord: ChordEstimate?
     private(set) var liveNoteCountInPhrase = 0
     private(set) var completedPhraseCount = 0
+    private(set) var discardedPhraseCount = 0
+    private(set) var lastDiscardReason: PhraseDiscardReason?
     private(set) var noteLog: [NoteLogEntry] = []
+    private(set) var inputMode: InputMode = .melodic
 
     /// Ticks up on every closed note — the view flashes on change as a visual "onset fired" cue.
     private(set) var onsetTick = 0
@@ -85,7 +90,10 @@ final class DiagnosticCaptureViewModel {
         chord = nil
         liveNoteCountInPhrase = 0
         completedPhraseCount = 0
+        discardedPhraseCount = 0
+        lastDiscardReason = nil
         onsetTick = 0
+        inputMode = .melodic
         noteLog.removeAll(keepingCapacity: true)
     }
 
@@ -162,12 +170,21 @@ final class DiagnosticCaptureViewModel {
             for note in phrase.notes {
                 noteLog.append(NoteLogEntry(
                     phraseIndex: phrase.index, onset: note.onset, duration: note.duration,
-                    midiNote: note.midiNote, isMelisma: note.isMelisma
+                    midiNote: note.midiNote, isMelisma: note.isMelisma,
+                    isRhythm: phrase.isRhythmOnly
                 ))
             }
             if noteLog.count > Self.maxLogEntries {
                 noteLog.removeFirst(noteLog.count - Self.maxLogEntries)
             }
+
+        case .phraseDiscarded(let reason):
+            discardedPhraseCount += 1
+            lastDiscardReason = reason
+            liveNoteCountInPhrase = 0
+
+        case .inputModeChanged(let mode):
+            inputMode = mode
         }
     }
 }

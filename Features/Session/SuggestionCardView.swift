@@ -125,7 +125,11 @@ struct SuggestionCardView: View {
     private func providerBadge(for candidate: LyricCandidate) -> some View {
         HStack(spacing: 6) {
             switch candidate.provider {
-            case .onDevice:
+            case .offline:
+                Label("OFFLINE DRAFT", systemImage: "bolt.slash.fill")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            case .appleIntelligence:
                 Label("ON-DEVICE AI", systemImage: "sparkles")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.accentColor)
@@ -133,10 +137,6 @@ struct SuggestionCardView: View {
                 Label("CLAUDE", systemImage: "sparkles")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.accentColor)
-            case .offline:
-                Label("OFFLINE DRAFT", systemImage: "bolt.slash.fill")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
             }
             if candidate.repaired {
                 Text("repaired")
@@ -148,7 +148,7 @@ struct SuggestionCardView: View {
 
     private func providerSpokenName(for candidate: LyricCandidate) -> String {
         switch candidate.provider {
-        case .onDevice: "written by on-device AI"
+        case .appleIntelligence: "written by on-device AI"
         case .claude: "written by Claude"
         case .offline: "offline draft"
         }

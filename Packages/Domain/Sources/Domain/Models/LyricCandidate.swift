@@ -1,7 +1,13 @@
 import Foundation
 
 public enum ProviderKind: String, Sendable, Equatable, Codable {
-    case claude, offline, onDevice
+    /// Apple's on-device Foundation Models framework — the premium path on
+    /// Apple Intelligence hardware. Nothing leaves the device.
+    case appleIntelligence
+    /// Remote Anthropic API — designed as an optional future provider; not shipped.
+    case claude
+    /// The deterministic lexicon assembler — the universal fallback.
+    case offline
 }
 
 /// LLM self-reported scores on the two genuinely subjective axes. Never trusted for the
