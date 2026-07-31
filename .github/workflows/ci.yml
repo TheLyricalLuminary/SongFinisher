@@ -16,33 +16,33 @@ jobs:
   # MelodyKit (AVFoundation/Accelerate) and the app target need macOS + Xcode and
   # are validated locally until macOS runners are enabled for the account.
   #
-  # Swift comes from the official image pulled by an ordinary `docker run` step
-  # rather than a job-level `container:`. Every run of this workflow so far — on
-  # every branch, including main — has been marked failed after ~2 seconds with
-  # runner_id 0, no steps, and no downloadable log, which is what a job that never
-  # reached a runner looks like rather than a job whose tests failed. Job-level
-  # containers are set up before any step logging begins, so they are the part of
-  # this workflow that could fail exactly that silently. Pulling the image inside
-  # a step instead means a runner that does pick the job up produces logs either
-  # way, which separates "containers are unavailable here" from "hosted runners
-  # are unavailable here" — the two candidates the API cannot currently tell apart.
+  # KNOWN RED, AND NOT FROM THIS FILE. Every run of this workflow, on every branch
+  # including main, is marked failed after ~2 seconds with runner_id 0, an empty
+  # runner_name, no steps recorded, and a 404 on the log download — while the same
+  # package tests pass locally. That is a job no runner ever picked up, not a job
+  # whose tests failed.
+  #
+  # Ruled out by experiment (runs #8 vs #9): removing the job-level `container:`
+  # and pulling the Swift image from an ordinary step instead changed nothing —
+  # identical runner_id 0 and identical 404. Job containers are set up before step
+  # logging begins, so they were the one part of this file capable of failing that
+  # silently, and they are not the cause. Nothing in the repository is.
+  #
+  # What still fits: hosted runners are unavailable to this account. Repository
+  # Settings → Actions → General, and the account's billing/spending limit, are
+  # where that gets resolved; a failed payment blocks Actions account-wide even on
+  # a public repo, where minutes are otherwise free. The built-in Pages deployment
+  # workflow does succeed, but it runs on GitHub-managed infrastructure and so does
+  # not prove hosted runners are reachable for ordinary jobs.
   linux-logic-tests:
     runs-on: ubuntu-latest
+    container: swift:6.0
     steps:
       - uses: actions/checkout@v4
-
-      # The first thing that emits output. If this shows up in the log at all, a
-      # runner started the job and the silent-failure question is answered.
-      - name: Runner check
-        run: |
-          echo "runner: ${RUNNER_OS} ${RUNNER_ARCH} — $(uname -srm)"
-          docker --version
-
       - name: Test Domain and LyricEngine
         run: |
           set -euo pipefail
           for p in Domain LyricEngine; do
             echo "── swift test: $p ──"
-            docker run --rm -v "$PWD:/src" -w /src swift:6.0 \
-              swift test --package-path "Packages/$p"
+            swift test --package-path "Packages/$p"
           done
