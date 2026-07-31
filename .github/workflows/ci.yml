@@ -15,15 +15,34 @@ jobs:
   #
   # MelodyKit (AVFoundation/Accelerate) and the app target need macOS + Xcode and
   # are validated locally until macOS runners are enabled for the account.
+  #
+  # Swift comes from the official image pulled by an ordinary `docker run` step
+  # rather than a job-level `container:`. Every run of this workflow so far — on
+  # every branch, including main — has been marked failed after ~2 seconds with
+  # runner_id 0, no steps, and no downloadable log, which is what a job that never
+  # reached a runner looks like rather than a job whose tests failed. Job-level
+  # containers are set up before any step logging begins, so they are the part of
+  # this workflow that could fail exactly that silently. Pulling the image inside
+  # a step instead means a runner that does pick the job up produces logs either
+  # way, which separates "containers are unavailable here" from "hosted runners
+  # are unavailable here" — the two candidates the API cannot currently tell apart.
   linux-logic-tests:
     runs-on: ubuntu-latest
-    container: swift:6.0
     steps:
       - uses: actions/checkout@v4
+
+      # The first thing that emits output. If this shows up in the log at all, a
+      # runner started the job and the silent-failure question is answered.
+      - name: Runner check
+        run: |
+          echo "runner: ${RUNNER_OS} ${RUNNER_ARCH} — $(uname -srm)"
+          docker --version
+
       - name: Test Domain and LyricEngine
         run: |
           set -euo pipefail
           for p in Domain LyricEngine; do
             echo "── swift test: $p ──"
-            swift test --package-path "Packages/$p"
+            docker run --rm -v "$PWD:/src" -w /src swift:6.0 \
+              swift test --package-path "Packages/$p"
           done
