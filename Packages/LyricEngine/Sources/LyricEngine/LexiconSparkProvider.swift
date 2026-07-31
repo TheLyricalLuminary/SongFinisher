@@ -20,12 +20,6 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
     static let maxSyllables = 3
     static let imageCount = 6
     static let rhymeCount = 6
-    /// Outweighs the whole statistical score for any curated word whose valence is
-    /// anywhere near the phrase's target (emotion fit spans roughly −8…0, freshness
-    /// −2…0, jitter 0…0.4), so the book's vocabulary heads the list and the statistical
-    /// picks fill what the curated list can't. Deliberately not unconditional: a curated
-    /// word pulling hard against the phrase's emotion should still lose.
-    static let triggerWordBonus = 5.0
     /// No more than this many images may share a primary part of speech, so the set
     /// is a mix of nouns / verbs / adjectives rather than six adjectives.
     static let maxPerPOS = 3
@@ -58,7 +52,17 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
             SyllableCounter.words(in: line.text)
         })
 
-        var scored: [(text: String, pos: POSCategory, score: Double)] = []
+        // Two tiers filled in order, rather than one score with a "curated" constant
+        // added on. Statistics alone rank "blockbuster", "heroine" and "brilliantly" as
+        // great Joy words — high VADER score, right freshness band — but no songwriter
+        // reaches for them; the book's Trigger Word Library is the missing signal. And
+        // because every word in that library is already appropriate for the state,
+        // ranking *within* it matters far less than variety does: a bonus large enough
+        // to guarantee curation wins also freezes the order, so the same six words come
+        // back phrase after phrase. Shuffling the curated tier instead keeps curation
+        // absolute and still turns the vocabulary over across a session.
+        var curated: [(String, POSCategory)] = []
+        var statistical: [(text: String, pos: POSCategory, score: Double)] = []
         for i in 0..<store.count {
             let entry = store[i]
             guard entry.syllables >= 1, entry.syllables <= Self.maxSyllables,
@@ -72,31 +76,28 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
                   entry.text.count > 1,
                   entry.text.allSatisfy({ $0.isLetter }) else { continue }
 
-            let emotionFit = -abs(entry.valence - target)
-            let freshness = -abs(entry.zipf - Self.freshnessPeak)
-            let jitter = Double(rng.next() % 100) / 250.0
-            // Curated beats statistical. Valence and frequency alone rank "blockbuster"
-            // and "heroine" as great Joy words — they score high on VADER and sit in the
-            // freshness band, but no songwriter reaches for them. The book's Trigger Word
-            // Library for this emotional state is the missing signal, and it outranks the
-            // statistics decisively; the statistical picks then fill whatever slots the
-            // curated list doesn't.
-            let curated = triggerWords.contains(entry.text) ? Self.triggerWordBonus : 0
-            scored.append((entry.text, entry.pos, emotionFit + freshness + jitter + curated))
+            if triggerWords.contains(entry.text) {
+                curated.append((entry.text, entry.pos))
+            } else {
+                let emotionFit = -abs(entry.valence - target)
+                let freshness = -abs(entry.zipf - Self.freshnessPeak)
+                statistical.append((entry.text, entry.pos, emotionFit + freshness))
+            }
         }
-        scored.sort { $0.score > $1.score }
+        curated.shuffle(using: &rng)
+        statistical.sort { $0.score > $1.score }
 
         var out: [String] = []
         var perPOS: [UInt16: Int] = [:]
-        for candidate in scored {
+        for (text, pos) in curated + statistical.map({ ($0.text, $0.pos) }) {
             guard out.count < Self.imageCount else { break }
-            guard !used.contains(candidate.text) else { continue }
-            let posKey = candidate.pos.intersection(.contentWord).rawValue
+            guard !used.contains(text) else { continue }
+            let posKey = pos.intersection(.contentWord).rawValue
             let count = perPOS[posKey, default: 0]
             guard count < Self.maxPerPOS else { continue }
             perPOS[posKey] = count + 1
-            used.insert(candidate.text)
-            out.append(candidate.text)
+            used.insert(text)
+            out.append(text)
         }
         return out
     }

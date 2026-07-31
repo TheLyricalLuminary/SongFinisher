@@ -21,6 +21,23 @@ import Domain
         #expect(Set(sparks.images).count == sparks.images.count)
     }
 
+    /// Exactly the guard `imageWords` applies before a word can be scored at all.
+    /// Mirrored rather than approximated on purpose: a looser copy would let this
+    /// test fail because a curated word was never *servable*, which says nothing
+    /// about whether the curation bonus works.
+    private func canSurfaceAsASpark(_ word: String) -> Bool {
+        guard let entry = Fixtures.store.lookup(word) else { return false }
+        return entry.syllables >= 1
+            && entry.syllables <= LexiconSparkProvider.maxSyllables
+            && entry.zipf >= LexiconSparkProvider.minZipf
+            && entry.zipf <= LexiconSparkProvider.maxZipf
+            && !entry.pos.isDisjoint(with: .contentWord)
+            && !PhraseAssembler.contentSlotStopWords.contains(entry.text)
+            && !PhraseAssembler.excludedContentWords.contains(entry.text)
+            && entry.text.count > 1
+            && entry.text.allSatisfy { $0.isLetter }
+    }
+
     @Test func curatedTriggerWordsHeadTheImageSet() {
         // Regression for "blockbuster" and "heroine" surfacing as Joy sparks: valence
         // and frequency rank them highly (strong VADER score, right freshness band) but
@@ -28,12 +45,7 @@ import Domain
         // signal statistics can't, so wherever it has words the spark filters can serve,
         // some of them must actually make the six.
         for emotion in Emotion.allCases {
-            let eligible = TriggerWordBank.words(for: emotion).filter { word in
-                guard let entry = Fixtures.store.lookup(word) else { return false }
-                return entry.syllables >= 1 && entry.syllables <= LexiconSparkProvider.maxSyllables
-                    && entry.zipf >= LexiconSparkProvider.minZipf
-                    && entry.zipf <= LexiconSparkProvider.maxZipf
-            }
+            let eligible = TriggerWordBank.words(for: emotion).filter(canSurfaceAsASpark)
             guard !eligible.isEmpty else { continue }
             let sparks = provider.sparks(
                 for: Fixtures.spec(syllables: 6, stress: "SwSwSw", emotion: emotion),
@@ -41,6 +53,29 @@ import Domain
             )
             #expect(!Set(sparks.images).isDisjoint(with: eligible),
                     "no curated \(emotion) trigger word surfaced: \(sparks.images)")
+        }
+    }
+
+    @Test func curatedSparksTurnOverAcrossASession() {
+        // The failure mode of *ranking* the curated tier rather than shuffling it: every
+        // trigger word ties on the curation bonus, so the same six come back phrase after
+        // phrase and the panel stops being sparks at all. Measured against the bundled
+        // lexicon, ranking exposed 6–9 distinct words across 8 phrases depending on
+        // emotion; shuffling exposes the whole eligible pool, 15–17. Twelve sits clear of
+        // both, so this catches a regression to frozen order without pinning the draw.
+        for emotion in Emotion.allCases {
+            let eligible = TriggerWordBank.words(for: emotion).filter(canSurfaceAsASpark)
+            // Emotions whose curated pool barely exceeds one panel can't demonstrate
+            // turnover either way; the property is tested on the ones with room.
+            guard eligible.count >= 15 else { continue }
+            var seen = Set<String>()
+            for _ in 0..<8 {
+                // A fresh phraseID is what moves the seed from one phrase to the next.
+                let spec = Fixtures.spec(syllables: 6, stress: "SwSwSw", emotion: emotion, phraseID: UUID())
+                seen.formUnion(provider.sparks(for: spec, memory: SessionMemory()).images)
+            }
+            #expect(seen.count >= 12,
+                    "\(emotion) sparks barely move across 8 phrases: \(seen.sorted())")
         }
     }
 
