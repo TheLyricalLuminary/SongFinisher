@@ -52,7 +52,16 @@ final class ProStore: GenerationGating {
     }
 
     func allowPremiumGeneration() -> Bool {
-        isPro || allowance.consume()
+        #if DEBUG
+        // Development builds are never metered. The daily free budget exists to shape a
+        // shipping user's upgrade decision; applied to the author's own machine it just
+        // blocks testing and — worse — silently degrades a demo recording to OFFLINE
+        // DRAFT partway through, since every regenerate/more-like-this/syllable-nudge
+        // spends a credit. Release builds still meter exactly as before.
+        return true
+        #else
+        return isPro || allowance.consume()
+        #endif
     }
 
     func loadProducts() async {
