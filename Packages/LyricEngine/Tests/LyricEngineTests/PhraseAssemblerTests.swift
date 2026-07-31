@@ -30,12 +30,21 @@ import Domain
         let spec = Fixtures.spec(syllables: 7, stress: "SwSwwSw")
         _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: 0, poolTarget: 60)  // warm the index
 
-        let start = DispatchTime.now()
-        _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: 1, poolTarget: 60)
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+        // Best of N, not a single sample. `.serialized` keeps this suite's own tests off
+        // the CPU, but nothing stops the other suites — or Xcode, or the rest of the
+        // machine — from descheduling one run mid-measurement, and that showed up as a
+        // 2.7x flake. Scheduler noise only ever *adds* time, so the fastest run is the
+        // honest estimate of the work done, and a real regression still slows every run.
+        var bestMs = Double.greatestFiniteMagnitude
+        for seed in UInt64(1)...5 {
+            let start = DispatchTime.now()
+            _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: seed, poolTarget: 60)
+            let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+            bestMs = min(bestMs, elapsedMs)
+        }
         // Host Mac hardware and a debug build both run faster and slower than an A15 in
         // different ways; this ceiling gates gross regressions, not A15-exact timing.
-        #expect(elapsedMs < 300, "assembly took \(elapsedMs) ms")
+        #expect(bestMs < 300, "fastest of 5 assemblies took \(bestMs) ms")
     }
 
     @Test func wellAlignedStressBeatsMisalignedStress() {

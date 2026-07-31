@@ -21,6 +21,47 @@ import Domain
         #expect(Set(sparks.images).count == sparks.images.count)
     }
 
+    @Test func curatedTriggerWordsHeadTheImageSet() {
+        // Regression for "blockbuster" and "heroine" surfacing as Joy sparks: valence
+        // and frequency rank them highly (strong VADER score, right freshness band) but
+        // no songwriter reaches for them. The book's Trigger Word Library supplies the
+        // signal statistics can't, so wherever it has words the spark filters can serve,
+        // some of them must actually make the six.
+        for emotion in Emotion.allCases {
+            let eligible = TriggerWordBank.words(for: emotion).filter { word in
+                guard let entry = Fixtures.store.lookup(word) else { return false }
+                return entry.syllables >= 1 && entry.syllables <= LexiconSparkProvider.maxSyllables
+                    && entry.zipf >= LexiconSparkProvider.minZipf
+                    && entry.zipf <= LexiconSparkProvider.maxZipf
+            }
+            guard !eligible.isEmpty else { continue }
+            let sparks = provider.sparks(
+                for: Fixtures.spec(syllables: 6, stress: "SwSwSw", emotion: emotion),
+                memory: SessionMemory()
+            )
+            #expect(!Set(sparks.images).isDisjoint(with: eligible),
+                    "no curated \(emotion) trigger word surfaced: \(sparks.images)")
+        }
+    }
+
+    @Test func imagesNeverSurfaceProfanityOrSingleLetters() {
+        // Sparks are raw material handed straight to the songwriter, so they need the
+        // guards the assembler applies to content slots — the emotion-alignment scoring
+        // actively seeks out profanity for negative-valence phrases, and Moby tags the
+        // single letters as nouns.
+        for emotion in Emotion.allCases {
+            let sparks = provider.sparks(
+                for: Fixtures.spec(syllables: 6, stress: "SwSwSw", emotion: emotion),
+                memory: SessionMemory()
+            )
+            for word in sparks.images {
+                #expect(!PhraseAssembler.excludedContentWords.contains(word),
+                        "'\(word)' surfaced as a \(emotion) spark")
+                #expect(word.count > 1, "single letter '\(word)' surfaced as a spark")
+            }
+        }
+    }
+
     @Test func sameSpecAndMemoryIsDeterministic() {
         let phraseID = UUID()
         let specA = Fixtures.spec(syllables: 5, stress: "SwSww", phraseID: phraseID)

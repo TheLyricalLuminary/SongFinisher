@@ -45,6 +45,12 @@ final class SessionViewModel {
     /// Evocative words + rhymes for the current phrase — the songwriter's raw material
     /// when the generated line isn't the one. Resolved locally and instantly.
     private(set) var currentSparks: WordSparks?
+    /// Which engine wrote the lines most recently shown. The session screen leads with
+    /// sparks rather than the card on the offline tier, and reading the *last* engine
+    /// rather than the one currently running keeps that layout stable across the gap
+    /// while the next generation is in flight. Seeded from the composed provider so the
+    /// first phrase of a session is already laid out right.
+    private(set) var lastProviderKind: ProviderKind
     private(set) var generationError: String?
     private(set) var sessionMemory = SessionMemory()
     /// True once a generation in this session was routed to the offline engine because
@@ -94,6 +100,10 @@ final class SessionViewModel {
         self.sessionMemory = initialMemory
         self.gating = gating
         self.isFlowMode = UserDefaults.standard.bool(forKey: Self.flowModeKey)
+        // `AppServices` already picked the best available engine at composition time, so
+        // on hardware without Apple Intelligence the screen can lay itself out correctly
+        // before the first phrase instead of reordering once the first draft lands.
+        self.lastProviderKind = services.lyrics.kind
     }
 
     func start() {
@@ -253,13 +263,21 @@ final class SessionViewModel {
         // nudge) spends one premium credit. Out of credits → the offline engine, whose
         // cards badge themselves OFFLINE DRAFT, so the downgrade is always visible.
         let usePremium = gating?.allowPremiumGeneration() ?? true
-        if !usePremium { didHitFreeLimit = true }
+        if !usePremium {
+            didHitFreeLimit = true
+            // Known before the request even runs, so the layout settles now rather than
+            // reordering under the writer's eyes when the draft lands.
+            lastProviderKind = .offline
+        }
         let provider = usePremium ? services.lyrics : services.offlineLyrics
 
         do throws(LyricProviderError) {
             let raw = try await provider.candidates(for: spec, memory: sessionMemory)
             guard !Task.isCancelled, currentSpec?.phraseID == spec.phraseID else { return }
             rankedCandidates = services.ranker.rank(raw, spec: spec, memory: sessionMemory)
+            // The premium provider falls back internally on ineligible hardware, so the
+            // candidate itself is the only honest report of which engine actually ran.
+            lastProviderKind = rankedCandidates.first?.candidate.provider ?? lastProviderKind
             generationError = nil
             updateLiveActivity(phase: .suggesting)
         } catch {

@@ -63,9 +63,53 @@ public struct PhraseAssembler: Sendable {
         "bastard", "asshole", "ass", "asses",
     ]
 
+    /// Determiners that must not precede a plural noun (`isAcceptable`). Hoisted out of
+    /// the loop that uses it — an array literal there re-allocates per adjacent pair.
+    static let singularDeterminers: Set<String> = ["a", "an", "this", "that"]
+
+    /// Lexicon row numbers for `contentSlotStopWords`, and for those plus
+    /// `excludedContentWords` plus the single letters.
+    ///
+    /// These are membership tests in the beam search's innermost loop — roughly half a
+    /// million evaluations per `assemble` call — and `Set<String>.contains` there means
+    /// hashing a String every time, which an unoptimized build cannot inline away. Since
+    /// every entry the beam ever sees comes out of the store, its row number identifies
+    /// it just as well, so the sets are resolved to `Set<Int>` once here and the hot path
+    /// only ever compares integers. Words absent from the lexicon simply contribute no
+    /// row, which is the same outcome as never matching an entry's text.
+    private let stopWordIDs: Set<Int>
+    private let blockedContentIDs: Set<Int>
+
     public init(store: LexiconStore, index: StressPatternIndex) {
         self.store = store
         self.index = index
+
+        let stopIDs = Set(Self.contentSlotStopWords.compactMap { store.lookup($0)?.index })
+        var blocked = stopIDs
+        blocked.formUnion(Self.excludedContentWords.compactMap { store.lookup($0)?.index })
+        // Moby tags the single letters as nouns ("l" the letter) and they read as typos
+        // in a lyric. One pass over the word table costs a few milliseconds at load and
+        // is exact, where enumerating a…z would assume what a single-character row can be.
+        for i in 0..<store.count where store.wordText(at: i).count == 1 {
+            blocked.insert(i)
+        }
+        self.stopWordIDs = stopIDs
+        self.blockedContentIDs = blocked
+    }
+
+    /// The subset of this emotion's trigger words that may actually take a content slot,
+    /// as lexicon row numbers. Resolved once per `assemble` call so `positionScore` can
+    /// collapse three checks (curated / content-word / not-a-stop-word) into one integer
+    /// set lookup in its innermost loop.
+    private func triggerWordIDs(for emotion: Emotion) -> Set<Int> {
+        var ids = Set<Int>()
+        for word in TriggerWordBank.words(for: emotion) {
+            guard let entry = store.lookup(word),
+                  !entry.pos.isDisjoint(with: .contentWord),
+                  !stopWordIDs.contains(entry.index) else { continue }
+            ids.insert(entry.index)
+        }
+        return ids
     }
 
     /// A slot category is "content" when it carries lexical stress and meaning
@@ -91,7 +135,7 @@ public struct PhraseAssembler: Sendable {
 
         for (word, next) in zip(words, words.dropFirst()) {
             if word == "a", let first = next.first, "aeiou".contains(first) { return false }
-            if ["a", "an", "this", "that"].contains(word), next.hasSuffix("s"),
+            if Self.singularDeterminers.contains(word), next.hasSuffix("s"),
                let entry = store.lookup(next), entry.pos.contains(.pluralNoun) {
                 return false
             }
@@ -111,7 +155,7 @@ public struct PhraseAssembler: Sendable {
         let longSlots = Set(spec.longNoteSlots)
         let targetValence = Self.targetValence(for: spec)
         let emotion = spec.requestedEmotionOverride ?? spec.topEmotions.first?.emotion ?? .reflection
-        let triggerWords = TriggerWordBank.words(for: emotion)
+        let triggerWords = triggerWordIDs(for: emotion)
 
         var rng = SeededRandom(seed: seed)
         var templates = TemplateBank.all.filter {
@@ -155,7 +199,7 @@ public struct PhraseAssembler: Sendable {
         longSlots: Set<Int>,
         durations: [Int],
         targetValence: Double,
-        triggerWords: Set<String> = [],
+        triggerWords: Set<Int> = [],
         rng: inout SeededRandom
     ) -> [AssembledLine] {
         let n = pattern.count
@@ -225,10 +269,9 @@ public struct PhraseAssembler: Sendable {
                 let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: reach, rng: &rng)
                 for id in ids {
                     let entry = store[Int(id)]
-                    if isContent, Self.contentSlotStopWords.contains(entry.text) { continue }
-                    // Single letters carry noun tags in Moby ("l" the letter) and read
-                    // as typos in a lyric; profanity is never auto-suggested.
-                    if isContent, entry.text.count == 1 || Self.excludedContentWords.contains(entry.text) { continue }
+                    // Function words, single letters, and profanity all disqualify an
+                    // entry from a content slot, so they share one precomputed row set.
+                    if isContent, blockedContentIDs.contains(entry.index) { continue }
                     // Moby also tags the articles as prepositions, so without this a
                     // preposition slot happily takes "a" — "half a your cans". An
                     // article-tagged word never belongs in a non-article POS slot.
@@ -293,7 +336,7 @@ public struct PhraseAssembler: Sendable {
         pattern: [Stress],
         longSlots: Set<Int>,
         durations: [Int],
-        triggerWords: Set<String> = [],
+        triggerWords: Set<Int> = [],
         rng: inout SeededRandom
     ) -> Double {
         var score = 0.0
@@ -336,11 +379,10 @@ public struct PhraseAssembler: Sendable {
         // Curated beats statistical: content words from the book's Trigger Word
         // Library for the phrase's emotional state ("The Song Finisher", Emotional
         // State Engineering) get a lexical bonus on top of the valence term. Kept
-        // below the stress-fit weights so the meter still rules, and content-only so
-        // a trigger word's fringe POS tag can't drag it into the wrong slot.
-        if triggerWords.contains(entry.text),
-           !entry.pos.isDisjoint(with: .contentWord),
-           !Self.contentSlotStopWords.contains(entry.text) {
+        // below the stress-fit weights so the meter still rules. The content-word and
+        // not-a-stop-word conditions are already baked into `triggerWordIDs`, so a
+        // trigger word's fringe POS tag still can't drag it into the wrong slot.
+        if triggerWords.contains(entry.index) {
             score += 0.25
         }
         score += Double(rng.next() % 100) / 2000.0
@@ -359,7 +401,7 @@ public struct PhraseAssembler: Sendable {
             // that made "a" rank as a noun (see contentSlotStopWords' doc comment) would
             // otherwise let a bare function word count as the line's one required
             // "real content" word, defeating the isAcceptable guard from the inside.
-            let isContent = !entry.pos.isDisjoint(with: .contentWord) && !Self.contentSlotStopWords.contains(entry.text)
+            let isContent = !entry.pos.isDisjoint(with: .contentWord) && !stopWordIDs.contains(entry.index)
             for j in 0..<entry.syllables {
                 stressPattern.append(entry.isStressed(syllable: j) ? .strong : .weak)
             }

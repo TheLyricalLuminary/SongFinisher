@@ -20,6 +20,12 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
     static let maxSyllables = 3
     static let imageCount = 6
     static let rhymeCount = 6
+    /// Outweighs the whole statistical score for any curated word whose valence is
+    /// anywhere near the phrase's target (emotion fit spans roughly −8…0, freshness
+    /// −2…0, jitter 0…0.4), so the book's vocabulary heads the list and the statistical
+    /// picks fill what the curated list can't. Deliberately not unconditional: a curated
+    /// word pulling hard against the phrase's emotion should still lose.
+    static let triggerWordBonus = 5.0
     /// No more than this many images may share a primary part of speech, so the set
     /// is a mix of nouns / verbs / adjectives rather than six adjectives.
     static let maxPerPOS = 3
@@ -43,6 +49,8 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
 
     private func imageWords(for spec: PhraseSpec, memory: SessionMemory) -> [String] {
         let target = PhraseAssembler.targetValence(for: spec)
+        let emotion = spec.requestedEmotionOverride ?? spec.topEmotions.first?.emotion ?? .reflection
+        let triggerWords = TriggerWordBank.words(for: emotion)
         var rng = SeededRandom(seed: Self.seed(for: spec, memory: memory))
 
         // Words already used this session are stale as fresh sparks.
@@ -57,12 +65,24 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
                   entry.zipf >= Self.minZipf, entry.zipf <= Self.maxZipf,
                   !entry.pos.isDisjoint(with: .contentWord),
                   !PhraseAssembler.contentSlotStopWords.contains(entry.text),
+                  // Sparks are shown to the songwriter as raw material, so they need the
+                  // same guards the assembler applies to content slots: never surface
+                  // profanity, and never a single letter (the lexicon tags "l" a noun).
+                  !PhraseAssembler.excludedContentWords.contains(entry.text),
+                  entry.text.count > 1,
                   entry.text.allSatisfy({ $0.isLetter }) else { continue }
 
             let emotionFit = -abs(entry.valence - target)
             let freshness = -abs(entry.zipf - Self.freshnessPeak)
             let jitter = Double(rng.next() % 100) / 250.0
-            scored.append((entry.text, entry.pos, emotionFit + freshness + jitter))
+            // Curated beats statistical. Valence and frequency alone rank "blockbuster"
+            // and "heroine" as great Joy words — they score high on VADER and sit in the
+            // freshness band, but no songwriter reaches for them. The book's Trigger Word
+            // Library for this emotional state is the missing signal, and it outranks the
+            // statistics decisively; the statistical picks then fill whatever slots the
+            // curated list doesn't.
+            let curated = triggerWords.contains(entry.text) ? Self.triggerWordBonus : 0
+            scored.append((entry.text, entry.pos, emotionFit + freshness + jitter + curated))
         }
         scored.sort { $0.score > $1.score }
 

@@ -40,6 +40,36 @@ struct SessionView: View {
         viewModel.inputMode == .rhythmic || viewModel.currentPhrase?.isRhythmOnly == true
     }
 
+    /// True on the offline tier, whenever there is actually raw material to lead with.
+    private var leadsWithSparks: Bool {
+        viewModel.lastProviderKind == .offline && !(viewModel.currentSparks?.isEmpty ?? true)
+    }
+
+    private var suggestionCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if leadsWithSparks {
+                Text("OR START FROM A DRAFT")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            SuggestionCardView(
+                ranked: viewModel.rankedCandidates,
+                onUse: { viewModel.use($0) },
+                onMoreLikeThis: { viewModel.moreLikeThis($0) },
+                onRegenerate: { viewModel.regenerate() },
+                onDifferentEmotion: { viewModel.differentEmotion($0) },
+                onAdjustSyllables: { viewModel.adjustSyllableTarget(by: $0) }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var sparksSection: some View {
+        if let sparks = viewModel.currentSparks, !sparks.isEmpty {
+            SparksView(sparks: sparks)
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -92,17 +122,19 @@ struct SessionView: View {
                 }
 
                 if showsFinalStressPattern {
-                    SuggestionCardView(
-                        ranked: viewModel.rankedCandidates,
-                        onUse: { viewModel.use($0) },
-                        onMoreLikeThis: { viewModel.moreLikeThis($0) },
-                        onRegenerate: { viewModel.regenerate() },
-                        onDifferentEmotion: { viewModel.differentEmotion($0) },
-                        onAdjustSyllables: { viewModel.adjustSyllableTarget(by: $0) }
-                    )
-
-                    if let sparks = viewModel.currentSparks, !sparks.isEmpty {
-                        SparksView(sparks: sparks)
+                    // Which half of the screen leads depends on which engine wrote the
+                    // line. The offline assembler fits meter but has no model of meaning
+                    // — it produces "warm in a doom" — so presenting its output as the
+                    // answer misrepresents what it is. The words are meaningful by
+                    // construction, so on that tier they lead and the draft sits under
+                    // them as a starting point. On the AI tier the line is genuinely the
+                    // answer and leads, as before.
+                    if leadsWithSparks {
+                        sparksSection
+                        suggestionCard
+                    } else {
+                        suggestionCard
+                        sparksSection
                     }
                 }
 
