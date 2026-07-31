@@ -40,12 +40,32 @@ enum TestSignals {
         440.0 * pow(2.0, (midi - 69.0) / 12.0)
     }
 
+    /// A chord: simultaneous pure tones summed sample-by-sample. Deliberately pure sine
+    /// (no harmonics) so the chroma detector sees only the exact chord tones — no
+    /// overtone-series contamination to muddy the ground truth (docs/ARCHITECTURE.md §11).
+    /// A lower per-note amplitude than `tone()`'s default keeps the summed peak well under
+    /// clipping even for 4-note chords. Distinct from `chord()` below: `ChordDetector`
+    /// (chroma matching) needs exact ground truth, while `PolyphonyDetector` needs a
+    /// realistic spectrum — the two tests' fixtures have opposite requirements.
+    static func pureToneChord(midiNotes: [Double], duration: TimeInterval, amplitude: Float = 0.2) -> [Float] {
+        let count = Int(duration * sampleRate)
+        var out = [Float](repeating: 0, count: count)
+        for midi in midiNotes {
+            let tone = tone(frequency: frequency(midi: midi), duration: duration, amplitude: amplitude)
+            for i in 0..<min(count, tone.count) {
+                out[i] += tone[i]
+            }
+        }
+        return out
+    }
+
     /// A chord: simultaneous voices under a shared attack/release envelope, per-voice
     /// amplitude normalized so the sum never clips. Each voice carries three harmonic
     /// partials (1×, 2× at half, 3× at quarter amplitude) — a pluck-ish timbre. Pure
     /// sines would be an unrealistically hard case for spectral peak analysis: low
     /// guitar strings sit ~2.6 FFT bins apart and their windowed main lobes merge,
     /// which real string harmonics (spread far up the spectrum) never suffer from.
+    /// Used by `strummedChord` below for the polyphony/rhythm-routing tests.
     static func chord(midiNotes: [Double], duration: TimeInterval, amplitude: Float = 0.5) -> [Float] {
         let count = Int(duration * sampleRate)
         let attack = min(count / 8, 160)
@@ -138,6 +158,9 @@ extension Array where Element == AnalysisEvent {
     }
     var tempoUpdates: [TempoEstimate] {
         compactMap { if case .tempoUpdated(let t) = $0 { t } else { nil } }
+    }
+    var chordUpdates: [ChordEstimate] {
+        compactMap { if case .chordUpdated(let c) = $0 { c } else { nil } }
     }
     var inputModeChanges: [InputMode] {
         compactMap { if case .inputModeChanged(let m) = $0 { m } else { nil } }

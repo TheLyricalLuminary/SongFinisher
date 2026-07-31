@@ -27,6 +27,9 @@ struct WaveformView: View {
             }
         }
         .frame(height: 64)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Input level")
+        .accessibilityValue(isVoiced ? "hearing your melody" : "quiet")
     }
 
     private static let maxBars = 80

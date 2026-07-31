@@ -1,43 +1,23 @@
 import SwiftUI
 import Domain
 
-/// Routes to the main product screen. The permission gate → SongListView shell from
-/// docs/ARCHITECTURE.md §6 is a later phase; this goes straight to SessionView, the same
-/// way it went straight to the diagnostic tool before SessionView existed.
+/// The app's root (docs/ARCHITECTURE.md §6): the song library is home, and everything —
+/// starting a session, reopening a draft, reading the finished sheet, the DSP diagnostics
+/// tool — hangs off it. `SongListView` owns the `NavigationStack` and routing; this stays a
+/// thin seam so the composition root has a single view to hand `services` to. The one
+/// exception is first-run onboarding, gated here since it has to intercept every route.
 struct RootView: View {
     let services: AppServices
+    /// `nil` = unmetered (previews, Mac validation builds without a store).
+    var proStore: ProStore? = nil
 
-    @State private var showsDiagnostics = false
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some View {
-        NavigationStack {
-            SessionView(services: services)
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            showsDiagnostics = true
-                        } label: {
-                            Image(systemName: "waveform.path.ecg")
-                        }
-                        .accessibilityLabel("DSP diagnostic tool")
-                    }
-                }
-        }
-        .sheet(isPresented: $showsDiagnostics) {
-            DiagnosticCaptureView(services: services)
-                // Plain macOS sheets have no built-in close affordance (no Escape,
-                // no title bar) — this is the only way out without a toolbar close button.
-                .overlay(alignment: .topTrailing) {
-                    Button {
-                        showsDiagnostics = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white, .black.opacity(0.4))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(10)
-                }
+        if hasCompletedOnboarding {
+            SongListView(services: services, proStore: proStore)
+        } else {
+            OnboardingView(onFinish: { hasCompletedOnboarding = true })
         }
     }
 }

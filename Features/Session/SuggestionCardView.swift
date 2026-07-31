@@ -53,17 +53,22 @@ struct SuggestionCardView: View {
                 Image(systemName: "chevron.left")
             }
             .disabled(current == 0)
+            .keyboardShortcut(.leftArrow, modifiers: [])
+            .accessibilityLabel("Previous suggestion")
 
             ForEach(0..<count, id: \.self) { i in
                 Circle()
                     .fill(i == current ? Color.primary : Color.secondary.opacity(0.3))
                     .frame(width: 6, height: 6)
             }
+            .accessibilityHidden(true)
 
             Button { selection = min(count - 1, current + 1) } label: {
                 Image(systemName: "chevron.right")
             }
             .disabled(current == count - 1)
+            .keyboardShortcut(.rightArrow, modifiers: [])
+            .accessibilityLabel("Next suggestion")
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
@@ -79,23 +84,33 @@ struct SuggestionCardView: View {
         .frame(minHeight: 200)
         .frame(maxWidth: .infinity)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Finding a line that fits")
     }
 
     private func card(for ranked: RankedCandidate, rank: Int) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                providerBadge(for: ranked.candidate)
-                Spacer()
-                Text("rank \(rank)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            // The line itself plus its metadata read as one VoiceOver element; the stress
+            // underline is a visual duplicate of the syllable info and stays hidden.
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    providerBadge(for: ranked.candidate)
+                    Spacer()
+                    Text("rank \(rank)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(ranked.candidate.text)
+                    .font(.system(.title2, design: .rounded, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                stressUnderline(for: ranked.candidate)
+                    .accessibilityHidden(true)
             }
-
-            Text(ranked.candidate.text)
-                .font(.system(.title2, design: .rounded, weight: .semibold))
-                .fixedSize(horizontal: false, vertical: true)
-
-            stressUnderline(for: ranked.candidate)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Suggestion \(rank): \(ranked.candidate.text)")
+            .accessibilityValue("\(ranked.candidate.syllableCount) syllables, \(providerSpokenName(for: ranked.candidate))")
 
             syllableChips
         }
@@ -104,6 +119,9 @@ struct SuggestionCardView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
     }
 
+    /// Honest provenance (App Store fairness as much as UX): on-device AI, cloud, and the
+    /// deterministic offline assembler are all clearly distinguished so a user on
+    /// non-Apple-Intelligence hardware is never told a template line was "AI".
     private func providerBadge(for candidate: LyricCandidate) -> some View {
         HStack(spacing: 6) {
             switch candidate.provider {
@@ -125,6 +143,14 @@ struct SuggestionCardView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+        }
+    }
+
+    private func providerSpokenName(for candidate: LyricCandidate) -> String {
+        switch candidate.provider {
+        case .appleIntelligence: "written by on-device AI"
+        case .claude: "written by Claude"
+        case .offline: "offline draft"
         }
     }
 
@@ -153,7 +179,11 @@ struct SuggestionCardView: View {
     private var syllableChips: some View {
         HStack(spacing: 8) {
             Button("−1 syllable") { onAdjustSyllables(-1) }
+                .accessibilityLabel("One fewer syllable")
+                .accessibilityHint("Requests new lines one syllable shorter")
             Button("+1 syllable") { onAdjustSyllables(1) }
+                .accessibilityLabel("One more syllable")
+                .accessibilityHint("Requests new lines one syllable longer")
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -162,14 +192,24 @@ struct SuggestionCardView: View {
 
     private func controls(for ranked: RankedCandidate) -> some View {
         HStack(spacing: 10) {
+            // Keyboard shortcuts exist so hands never leave the instrument: Bluetooth
+            // page-turner pedals (AirTurn, PageFlip — hardware guitarists already own)
+            // present as HID keyboards sending exactly these keys, so binding them here
+            // makes the whole card foot-operable for free, with no pairing code of ours.
             Button("Use") { onUse(ranked) }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.space, modifiers: [])
+                .accessibilityHint("Adds this line to your song and returns to listening. Shortcut: space")
 
             Button("More Like This") { onMoreLikeThis(ranked) }
                 .buttonStyle(.bordered)
+                .keyboardShortcut("m", modifiers: [])
+                .accessibilityHint("Requests new lines close to this one's imagery. Shortcut: M")
 
             Button("Regenerate") { onRegenerate() }
                 .buttonStyle(.bordered)
+                .keyboardShortcut("r", modifiers: [])
+                .accessibilityHint("Replaces these suggestions with fresh ones. Shortcut: R")
 
             Menu("Different Emotion") {
                 ForEach(Emotion.allCases, id: \.self) { emotion in
@@ -177,6 +217,7 @@ struct SuggestionCardView: View {
                 }
             }
             .buttonStyle(.bordered)
+            .accessibilityHint("Requests new lines in a mood you choose")
         }
         .font(.callout)
     }

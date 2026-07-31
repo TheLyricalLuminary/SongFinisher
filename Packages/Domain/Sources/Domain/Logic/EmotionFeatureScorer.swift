@@ -62,7 +62,21 @@ public enum EmotionFeatureScorer {
         .reflection: WeightRow(tempo: -1.0, slope: -0.1, range: -0.8, interval: -0.6, density: -0.9, duration:  1.0, energyArc: -0.2, descent:  0.2, bias:  0.0),
     ]
 
-    public static func classify(_ features: EmotionFeatureVector) -> [EmotionScore] {
+    /// Harmony's contribution to mood, layered on top of the melodic-feature logits when a
+    /// chord read is reliable (docs/ARCHITECTURE.md §8 companion — chord is a bonus signal,
+    /// not a required one). Values are additive logit nudges, not probabilities: major
+    /// brightens joy/hope, minor darkens toward melancholy/longing, and the two unstable
+    /// qualities (diminished, augmented) plus the bluesy dominant7 all lean tension rather
+    /// than straightforwardly sad.
+    private static let chordBias: [ChordQuality: [Emotion: Double]] = [
+        .major: [.joy: 0.9, .hope: 0.7, .release: 0.3],
+        .minor: [.melancholy: 0.9, .longing: 0.7, .reflection: 0.4],
+        .dominant7: [.tension: 0.6, .hope: 0.3],
+        .diminished: [.tension: 0.9, .melancholy: 0.3],
+        .augmented: [.tension: 0.8, .longing: 0.2],
+    ]
+
+    public static func classify(_ features: EmotionFeatureVector, chord: ChordEstimate? = nil) -> [EmotionScore] {
         var logits: [Emotion: Double] = [:]
         for (emotion, w) in weights {
             logits[emotion] = w.tempo * features.tempoNormalized
@@ -74,6 +88,13 @@ public enum EmotionFeatureScorer {
                 + w.energyArc * (features.energyArc - 1.0)
                 + w.descent * features.endsOnDescent
                 + w.bias
+        }
+
+        if let chord, chord.isReliable, let bias = chordBias[chord.quality] {
+            let strength = Double(chord.confidence)
+            for (emotion, weight) in bias {
+                logits[emotion, default: 0] += weight * strength
+            }
         }
 
         let maxLogit = logits.values.max() ?? 0
