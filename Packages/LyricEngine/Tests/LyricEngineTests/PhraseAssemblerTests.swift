@@ -23,28 +23,41 @@ import Domain
         }
     }
 
+    /// CPU time burned by the calling thread, which is what "how much work does this do"
+    /// actually means. Wall-clock keeps counting while the thread is descheduled, so it
+    /// measures how busy the machine was as much as how slow the code is.
+    private func threadCPUMilliseconds() -> Double {
+        var ts = timespec()
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)
+        return Double(ts.tv_sec) * 1_000 + Double(ts.tv_nsec) / 1_000_000
+    }
+
     @Test func generationStaysWellUnderTheLatencyBudget() {
         // poolTarget 60 matches what OfflineLyricProvider actually requests per call —
-        // the number the <100ms-on-A15 target is about. .serialized on this suite
-        // stops sibling tests' concurrent beam searches from stealing CPU mid-measurement.
+        // the number the <100ms-on-A15 target is about.
         let spec = Fixtures.spec(syllables: 7, stress: "SwSwwSw")
         _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: 0, poolTarget: 60)  // warm the index
 
-        // Best of N, not a single sample. `.serialized` keeps this suite's own tests off
-        // the CPU, but nothing stops the other suites — or Xcode, or the rest of the
-        // machine — from descheduling one run mid-measurement, and that showed up as a
-        // 2.7x flake. Scheduler noise only ever *adds* time, so the fastest run is the
-        // honest estimate of the work done, and a real regression still slows every run.
+        // Thread CPU time, not wall-clock, because this test was measuring the wrong
+        // thing. Two runs of the identical binary came in at 156 ms and 827 ms; the
+        // difference was scheduling. `.serialized` only orders *this* suite's cases —
+        // `OfflineLyricProviderTests` runs in parallel, and in the slow run five of its
+        // cases (each a full beam search) were still in flight during the measurement.
+        // The assembler was not slower; it was sharing the cores. CPU time doesn't
+        // advance while the thread is off-core, so it reports the work done either way,
+        // and a genuine regression — more work per call — still raises it.
+        //
+        // Best of three on top, since cache state and page faults still vary a little
+        // and only ever add.
         var bestMs = Double.greatestFiniteMagnitude
-        for seed in UInt64(1)...5 {
-            let start = DispatchTime.now()
+        for seed in UInt64(1)...3 {
+            let start = threadCPUMilliseconds()
             _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: seed, poolTarget: 60)
-            let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-            bestMs = min(bestMs, elapsedMs)
+            bestMs = min(bestMs, threadCPUMilliseconds() - start)
         }
         // Host Mac hardware and a debug build both run faster and slower than an A15 in
         // different ways; this ceiling gates gross regressions, not A15-exact timing.
-        #expect(bestMs < 300, "fastest of 5 assemblies took \(bestMs) ms")
+        #expect(bestMs < 300, "fastest of 3 assemblies used \(bestMs) ms of CPU")
     }
 
     @Test func wellAlignedStressBeatsMisalignedStress() {
