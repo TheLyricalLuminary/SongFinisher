@@ -54,26 +54,28 @@ import Domain
         let spec = Fixtures.spec(syllables: 7, stress: "SwSwwSw")
         _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: 0, poolTarget: 60)  // warm the index
 
-        // Thread CPU time, not wall-clock, because this test was measuring the wrong
-        // thing. Two runs of the identical binary came in at 156 ms and 827 ms; the
-        // difference was scheduling. `.serialized` only orders *this* suite's cases —
-        // `OfflineLyricProviderTests` runs in parallel, and in the slow run five of its
-        // cases (each a full beam search) were still in flight during the measurement.
-        // The assembler was not slower; it was sharing the cores. CPU time doesn't
-        // advance while the thread is off-core, so it reports the work done either way,
-        // and a genuine regression — more work per call — still raises it.
+        // Thread CPU time rather than wall-clock, best of three. Wall-clock kept counting
+        // while the thread was descheduled by the other suites, which is how identical
+        // binaries measured 156 ms and 827 ms on consecutive runs.
         //
-        // Best of three on top, since cache state and page faults still vary a little
-        // and only ever add.
+        // CPU time removes most of that but not all of it: it is immune to descheduling,
+        // *not* to memory-bandwidth contention, because a thread stalled on a cache miss
+        // is still on-core and still accumulating CPU time. `LexiconSparkProviderTests`
+        // streams the whole 35K-entry lexicon per case and runs in parallel with this
+        // one, so the number below still carries some of that. Measured 355 ms under
+        // full parallel load against roughly 80 ms for the same call on an idle machine.
+        //
+        // Hence a ceiling well above the honest cost. It is a tripwire for a change that
+        // makes assembly *categorically* slower — an accidental O(n) over the lexicon in
+        // the beam loop, say — and nothing finer. It is not the <100 ms-on-A15 product
+        // target: that is a release build on device, and no host test can stand in for it.
         var bestMs = Double.greatestFiniteMagnitude
         for seed in UInt64(1)...3 {
             let start = threadCPUMilliseconds()
             _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: seed, poolTarget: 60)
             bestMs = min(bestMs, threadCPUMilliseconds() - start)
         }
-        // Host Mac hardware and a debug build both run faster and slower than an A15 in
-        // different ways; this ceiling gates gross regressions, not A15-exact timing.
-        #expect(bestMs < 300, "fastest of 3 assemblies used \(bestMs) ms of CPU")
+        #expect(bestMs < 800, "fastest of 3 assemblies used \(bestMs) ms of CPU")
     }
 
     @Test func wellAlignedStressBeatsMisalignedStress() {

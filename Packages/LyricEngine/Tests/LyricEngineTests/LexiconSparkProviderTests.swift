@@ -63,7 +63,12 @@ import Domain
         // lexicon, ranking exposed 6–9 distinct words across 8 phrases depending on
         // emotion; shuffling exposes the whole eligible pool, 15–17. Twelve sits clear of
         // both, so this catches a regression to frozen order without pinning the draw.
-        for emotion in Emotion.allCases {
+        // Two emotions, not all eight. Each `sparks` call scans the whole 35K lexicon, so
+        // eight emotions × eight phrases was 64 scans — thirteen times the lexicon
+        // traffic this suite used to generate, enough to stall the concurrently-running
+        // assembler latency measurement on memory bandwidth. Two emotions from different
+        // curated pools demonstrate the property just as well.
+        for emotion in [Emotion.joy, .melancholy] {
             let eligible = TriggerWordBank.words(for: emotion).filter(canSurfaceAsASpark)
             // Emotions whose curated pool barely exceeds one panel can't demonstrate
             // turnover either way; the property is tested on the ones with room.
