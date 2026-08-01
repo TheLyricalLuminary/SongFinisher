@@ -51,6 +51,11 @@ final class SessionViewModel {
     /// while the next generation is in flight. Seeded from the composed provider so the
     /// first phrase of a session is already laid out right.
     private(set) var lastProviderKind: ProviderKind
+    /// True while a request is actually in flight. Without this, "still working" and
+    /// "finished and found nothing" are the same state on screen — an empty candidate
+    /// list — and the suggestion card's spinner runs forever with nothing coming. That
+    /// is not hypothetical: it is what a phrase with no matching template produced.
+    private(set) var isGenerating = false
     private(set) var generationError: String?
     private(set) var sessionMemory = SessionMemory()
     /// True once a generation in this session was routed to the offline engine because
@@ -258,6 +263,7 @@ final class SessionViewModel {
         currentSpec = spec
         state = .suggesting
         rankedCandidates = []
+        isGenerating = true
 
         // Free tier: each generation event (initial, regenerate, more-like-this, syllable
         // nudge) spends one premium credit. Out of credits → the offline engine, whose
@@ -274,14 +280,20 @@ final class SessionViewModel {
         do throws(LyricProviderError) {
             let raw = try await provider.candidates(for: spec, memory: sessionMemory)
             guard !Task.isCancelled, currentSpec?.phraseID == spec.phraseID else { return }
+            isGenerating = false
             rankedCandidates = services.ranker.rank(raw, spec: spec, memory: sessionMemory)
             // The premium provider falls back internally on ineligible hardware, so the
             // candidate itself is the only honest report of which engine actually ran.
             lastProviderKind = rankedCandidates.first?.candidate.provider ?? lastProviderKind
-            generationError = nil
+            // An empty pool is not an error the provider throws — it just returns nothing
+            // — so it has to be reported here or it reads as an unending wait.
+            generationError = rankedCandidates.isEmpty
+                ? "No line fits that phrase. Try playing a longer one, or nudge the syllable count."
+                : nil
             updateLiveActivity(phase: .suggesting)
         } catch {
             guard !Task.isCancelled else { return }
+            isGenerating = false
             generationError = "\(error)"
             state = .listening
             updateLiveActivity(phase: .listening)

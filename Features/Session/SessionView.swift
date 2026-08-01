@@ -129,11 +129,15 @@ struct SessionView: View {
                     // construction, so on that tier they lead and the draft sits under
                     // them as a starting point. On the AI tier the line is genuinely the
                     // answer and leads, as before.
+                    // The card carries its own loading state, so it is shown while a
+                    // request is genuinely in flight — but not once one has finished
+                    // empty-handed, where it would spin with nothing coming.
+                    let showsCard = viewModel.isGenerating || !viewModel.rankedCandidates.isEmpty
                     if leadsWithSparks {
                         sparksSection
-                        suggestionCard
+                        if showsCard { suggestionCard }
                     } else {
-                        suggestionCard
+                        if showsCard { suggestionCard }
                         sparksSection
                     }
                 }

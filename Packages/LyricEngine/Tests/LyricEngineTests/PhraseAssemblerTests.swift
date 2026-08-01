@@ -14,6 +14,22 @@ import Domain
         #expect(distinct.count >= 5, "only \(distinct.count) distinct lines for \(syllables) syllables")
     }
 
+    @Test("short phrases still get lines", arguments: [1, 2])
+    func shortPhrasesProduceCandidates(syllables: Int) {
+        // Every frame used to need three slots, so a one- or two-note phrase — one strum
+        // on Sparse density, or a two-note hum — matched no template, the pool came back
+        // empty, and the session screen sat on "finding a line that fits…" with nothing
+        // to find and no way out. The existing coverage all starts at 3, which is exactly
+        // why that shipped.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+        let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: 11, poolTarget: 60)
+        #expect(!pool.isEmpty, "no candidates for a \(syllables)-syllable phrase")
+        for line in pool {
+            #expect(line.syllables == syllables, "'\(line.text)' has \(line.syllables) syllables")
+        }
+    }
+
     @Test func everyAssembledLineMatchesTheRequestedSyllableCount() {
         let spec = Fixtures.spec(syllables: 6, stress: "SwSwwS")
         let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: 6, seed: 7, poolTarget: 40)
