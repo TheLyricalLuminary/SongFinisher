@@ -26,6 +26,53 @@ private func makeLine(_ text: String, stress: String = "Sw", emotion: Emotion = 
         #expect(all.first?.lines.isEmpty == true)
     }
 
+    @Test func replaceLineRewritesInPlaceWithoutMovingIt() async throws {
+        // Lines are kept automatically as they arrive, so regenerating a phrase rewrites
+        // a line that is already stored. Remove-then-append would send it to the end, and
+        // the saved song — and the text export built from it — would then disagree with
+        // the order the writer watched being built.
+        let store = try SongStore.inMemory()
+        let song = try await store.createSong(title: "Regenerate Test")
+        let first = makeLine("verse one")
+        let second = makeLine("verse two")
+        for line in [first, second] {
+            try await store.append(line: line, to: song.id)
+        }
+
+        let rewritten = makeLine("verse one, again")
+        try await store.replaceLine(id: first.id, with: rewritten, in: song.id)
+
+        let lines = try await store.fetchSongs().first?.lines ?? []
+        #expect(lines.map(\.text) == ["verse one, again", "verse two"])
+        // The row now carries the replacement's identity, so undo can still find it.
+        #expect(lines.first?.id == rewritten.id)
+    }
+
+    @Test func replacingAnUnknownLineIsANoOp() async throws {
+        let store = try SongStore.inMemory()
+        let song = try await store.createSong(title: "No-op Test")
+        try await store.append(line: makeLine("the only line"), to: song.id)
+
+        try await store.replaceLine(id: UUID(), with: makeLine("never stored"), in: song.id)
+
+        let lines = try await store.fetchSongs().first?.lines ?? []
+        #expect(lines.map(\.text) == ["the only line"])
+    }
+
+    @Test func replacedLineCanStillBeUndone() async throws {
+        // The two automatic paths compose: keep, regenerate, then take it back.
+        let store = try SongStore.inMemory()
+        let song = try await store.createSong(title: "Undo After Replace")
+        let original = makeLine("first attempt")
+        try await store.append(line: original, to: song.id)
+        let rewritten = makeLine("second attempt")
+        try await store.replaceLine(id: original.id, with: rewritten, in: song.id)
+
+        try await store.removeLine(id: rewritten.id, from: song.id)
+
+        #expect(try await store.fetchSongs().first?.lines.isEmpty == true)
+    }
+
     @Test func removeLineDropsItAndRedensifiesOrder() async throws {
         // Flow mode keeps lines without asking, so undo has to actually remove the row —
         // not just the in-memory copy — or the song sheet keeps a line the writer rejected.

@@ -81,6 +81,14 @@ actor FakeSongStore: SongStoring {
         songs[songID] = song
     }
 
+    func replaceLine(id: UUID, with line: LyricLine, in songID: UUID) async throws {
+        guard var song = songs[songID] else { throw FakeStoreError.notFound }
+        guard let index = song.lines.firstIndex(where: { $0.id == id }) else { return }
+        song.lines[index] = line
+        song.updatedAt = Date()
+        songs[songID] = song
+    }
+
     enum FakeStoreError: Error { case notFound }
 }
 

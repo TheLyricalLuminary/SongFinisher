@@ -64,10 +64,10 @@ final class SessionViewModel {
     private(set) var didHitFreeLimit = false
 
     /// Lock and move (the method from "The Song Finisher", as an app mode): with flow
-    /// mode on, playing the next phrase keeps the current top line instead of discarding
-    /// it. Taking your hands off the instrument to tap [Use] is what breaks a flow state,
-    /// and a phrase boundary is a gesture the writer already performs — so the app reads
-    /// "I played on" as "I'll take it" and leaves curation for the song sheet afterward.
+    /// mode on, every line is written onto the song sheet as it arrives. Taking your
+    /// hands off the instrument to tap [Use] is what breaks a flow state, so the app
+    /// records what you played and leaves curation for afterwards — one line per phrase,
+    /// replaced if you regenerate, and [Undo keep] takes back the last one.
     /// Persisted: a writer who works this way always works this way.
     var isFlowMode: Bool {
         didSet { UserDefaults.standard.set(isFlowMode, forKey: Self.flowModeKey) }
@@ -227,16 +227,10 @@ final class SessionViewModel {
 
     private func handlePhraseCompleted(_ phrase: Phrase) {
         liveNoteCountInPhrase = 0
-        // Lock and move: the finished phrase's best line is kept rather than silently
-        // dropped, so playing on *is* accepting. Runs before `currentSpec`/`currentPhrase`
-        // are replaced — the line being committed belongs to the phrase that just ended,
-        // not this one.
-        if isFlowMode, let top = rankedCandidates.first {
-            commitAccepted(top)
-            // Clear immediately: `generate` only empties this after an actor hop, and a
-            // second phrase landing in that window would commit the same line twice.
-            rankedCandidates = []
-        }
+        // Nothing to commit here any more: in flow mode a line is kept the moment it
+        // arrives (see `generate`), not when the next phrase pushes it off screen. That
+        // ordering is what made the song sheet stay empty for anyone who played a phrase
+        // and then stopped to look at it.
         currentPhrase = phrase
         generationTask?.cancel()
         state = .analyzingPhrase
@@ -290,6 +284,13 @@ final class SessionViewModel {
             generationError = rankedCandidates.isEmpty
                 ? "No line fits that phrase. Try playing a longer one, or nudge the syllable count."
                 : nil
+            // Keep it the moment it exists. A songwriter mid-take shouldn't have to do
+            // anything for the song to be recorded — the sheet is what they played, and
+            // pruning is a job for afterwards. `commitAccepted` keys on the phrase, so a
+            // regenerate for this same phrase rewrites its line instead of adding one.
+            if isFlowMode, let top = rankedCandidates.first {
+                commitAccepted(top)
+            }
             updateLiveActivity(phase: .suggesting)
         } catch {
             guard !Task.isCancelled else { return }
@@ -327,6 +328,20 @@ final class SessionViewModel {
         }
     }
 
+    /// Swaps a phrase's stored line for its replacement, in place. Remove-then-append
+    /// would work but would move the rewritten line to the end of the song, so the saved
+    /// sheet and its export would disagree with the order the writer watched being built
+    /// — `SessionMemory.record` keeps the position, and this has to match it.
+    private func persistReplacement(of replaced: LyricLine, with line: LyricLine) {
+        guard let songID else { return }
+        let store = services.store
+        let memorySnapshot = sessionMemory
+        Task {
+            try? await store.replaceLine(id: replaced.id, with: line, in: songID)
+            try? await store.updateMemory(memorySnapshot, songID: songID)
+        }
+    }
+
     private func syncMemoryToStore() {
         guard let songID else { return }
         let store = services.store
@@ -351,9 +366,15 @@ final class SessionViewModel {
         updateLiveActivity(phase: .listening)
     }
 
-    /// Appends a line to the session's accepted set and persists it. Shared by the
-    /// explicit [Use] tap and flow mode's automatic keep, so both paths record a line
-    /// identically — only the surrounding state handling differs.
+    /// Records a line on the song sheet and persists it. Shared by the explicit [Use]
+    /// tap and the automatic keep, so both paths record identically — only the
+    /// surrounding state handling differs.
+    ///
+    /// One line per phrase. [Regenerate], [More Like This], [Different Emotion] and the
+    /// syllable nudges all produce a new line for the *same* phrase, so they replace
+    /// that phrase's entry rather than stacking another copy; an explicit [Use] on a
+    /// line already kept automatically is likewise not a second line. Without this,
+    /// keeping automatically would turn every retry into a duplicate on the sheet.
     private func commitAccepted(_ ranked: RankedCandidate) {
         guard let spec = currentSpec else { return }
         let emotion = spec.topEmotions.first?.emotion ?? sessionMemory.dominantEmotion ?? .reflection
@@ -364,9 +385,12 @@ final class SessionViewModel {
             emotion: emotion,
             acceptedAt: Date()
         )
-        sessionMemory.acceptedLines.append(line)
         sessionMemory.dominantEmotion = emotion
-        persistAcceptedLine(line)
+        if let replaced = sessionMemory.record(line) {
+            persistReplacement(of: replaced, with: line)
+        } else {
+            persistAcceptedLine(line)
+        }
     }
 
     /// Takes back the most recently kept line without interrupting capture — the safety
