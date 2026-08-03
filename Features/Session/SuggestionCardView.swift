@@ -5,6 +5,10 @@ import Domain
 /// underline, provider badge, and the four intent controls from docs/ARCHITECTURE.md §9.
 struct SuggestionCardView: View {
     let ranked: [RankedCandidate]
+    /// The stress pattern the *melody* produced, so the card can show the fit against it
+    /// rather than only showing the line's own stress and leaving the comparison to the
+    /// reader. Empty when no phrase has been analysed yet.
+    let melodyPattern: [Stress]
     let onUse: (RankedCandidate) -> Void
     let onMoreLikeThis: (RankedCandidate) -> Void
     let onRegenerate: () -> Void
@@ -112,6 +116,10 @@ struct SuggestionCardView: View {
             .accessibilityLabel("Suggestion \(rank): \(ranked.candidate.text)")
             .accessibilityValue("\(ranked.candidate.syllableCount) syllables, \(providerSpokenName(for: ranked.candidate))")
 
+            // Outside the merged element above so VoiceOver reaches the fit as its own
+            // item — it answers a different question from "what does the line say".
+            MelodyFitView(candidate: ranked.candidate, melodyPattern: melodyPattern)
+
             syllableChips
         }
         .padding(20)
@@ -119,8 +127,8 @@ struct SuggestionCardView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
     }
 
-    /// Honest provenance (App Store fairness as much as UX): on-device AI, cloud, and the
-    /// deterministic offline assembler are all clearly distinguished so a user on
+    /// Honest provenance (App Store fairness as much as UX): the on-device AI tier and the
+    /// deterministic offline assembler are clearly distinguished so a user on
     /// non-Apple-Intelligence hardware is never told a template line was "AI".
     private func providerBadge(for candidate: LyricCandidate) -> some View {
         HStack(spacing: 6) {
@@ -231,6 +239,83 @@ struct SuggestionCardView: View {
     }
 }
 
+/// Shows the melody's stress pattern and the line's stress pattern on one axis, syllable
+/// by syllable, so the fit between them is *visible*.
+///
+/// Both halves were already on screen — the melody's pattern under SYLLABLES, the line's
+/// under the words — but in separate places, which asked the songwriter to hold two
+/// patterns in their head and compare. Nobody does that, so the most distinctive thing
+/// the app does read as though it might be guessing. This is the answer to "how do I know
+/// it's calculating to my melody?", on the card, in the moment.
+private struct MelodyFitView: View {
+    let candidate: LyricCandidate
+    let melodyPattern: [Stress]
+
+    /// One syllable's worth of comparison.
+    private struct Slot {
+        let melody: Stress
+        let line: Stress
+        var matches: Bool { melody == line }
+    }
+
+    private var slots: [Slot] {
+        // A repaired line can come back a syllable off the target, so compare only as far
+        // as both patterns reach and let the caption carry the length difference.
+        zip(melodyPattern, candidate.stressAlignment).map { pair in
+            Slot(melody: pair.0, line: pair.1)
+        }
+    }
+
+    private var matchCount: Int { slots.filter(\.matches).count }
+
+    var body: some View {
+        if !slots.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    ForEach(Array(slots.enumerated()), id: \.offset) { _, slot in
+                        column(for: slot)
+                    }
+                }
+                Text(caption)
+                    .font(.caption2)
+                    .foregroundStyle(matchCount == slots.count ? Color.accentColor : .secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Fit to your melody")
+            .accessibilityValue(caption)
+        }
+    }
+
+    /// Melody on top, line beneath: a matched pair reads as one solid column, a mismatch
+    /// visibly breaks. Width encodes stress so the shape of the melody is legible on its
+    /// own row rather than only through colour — which also keeps it readable for anyone
+    /// who can't distinguish the two tints.
+    private func column(for slot: Slot) -> some View {
+        VStack(spacing: 3) {
+            mark(slot.melody, tint: .secondary.opacity(0.55))
+            mark(slot.line, tint: slot.matches ? Color.accentColor : .orange)
+        }
+    }
+
+    private func mark(_ stress: Stress, tint: Color) -> some View {
+        Capsule()
+            .fill(tint)
+            .frame(width: stress == .strong ? 14 : 7, height: 4)
+    }
+
+    private var caption: String {
+        let lineCount = candidate.stressAlignment.count
+        let melodyCount = melodyPattern.count
+        let lengthNote = lineCount == melodyCount
+            ? ""
+            : " · \(lineCount) syllables against \(melodyCount) played"
+        if matchCount == slots.count {
+            return "every syllable lands on your melody's beats\(lengthNote)"
+        }
+        return "\(matchCount) of \(slots.count) land on your melody's beats\(lengthNote)"
+    }
+}
+
 #Preview {
     SuggestionCardView(
         ranked: [
@@ -243,6 +328,7 @@ struct SuggestionCardView: View {
                 score: LyricScore(syllableFit: 1, stressFit: 0.9, singability: 0.8, emotionalFit: 0.7, continuity: 0.6, memorability: 0.5)
             )
         ],
+        melodyPattern: [.weak, .strong, .weak, .strong, .weak, .strong, .weak],
         onUse: { _ in }, onMoreLikeThis: { _ in }, onRegenerate: {}, onDifferentEmotion: { _ in }, onAdjustSyllables: { _ in }
     )
     .padding()

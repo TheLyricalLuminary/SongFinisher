@@ -60,6 +60,7 @@ struct SessionView: View {
             }
             SuggestionCardView(
                 ranked: viewModel.rankedCandidates,
+                melodyPattern: viewModel.currentSpec?.budget.stressMap.pattern ?? [],
                 onUse: { viewModel.use($0) },
                 onMoreLikeThis: { viewModel.moreLikeThis($0) },
                 onRegenerate: { viewModel.regenerate() },
