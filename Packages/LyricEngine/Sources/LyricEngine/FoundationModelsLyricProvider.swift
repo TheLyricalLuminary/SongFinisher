@@ -41,7 +41,12 @@ public struct FoundationModelsLyricProvider: LyricProviding, Sendable {
     /// asset load it triggers is system-level and outlives it.
     public func prewarm() async {
         guard Self.isModelAvailable else { return }
-        LanguageModelSession(instructions: FoundationModelsPromptBuilder.instructions()).prewarm()
+        // Built with the same frozen instructions every request uses, so the framework
+        // warms the prefix this provider will actually send. The session itself is
+        // discarded — `candidates` opens a fresh one per request — but the asset load
+        // it triggers is system-level and outlives it.
+        let session = LanguageModelSession(instructions: FoundationModelsPromptBuilder.instructions())
+        session.prewarm()
     }
 
     public func candidates(for spec: PhraseSpec, memory: SessionMemory) async throws(LyricProviderError) -> [LyricCandidate] {
