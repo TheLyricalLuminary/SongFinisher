@@ -1,8 +1,12 @@
 name: CI
 
 on:
+  # `push` on every branch plus `pull_request` meant each commit to a PR branch
+  # started two identical runs — two checks, two notifications, one commit's worth
+  # of information. Pushes are watched on the default branch only; everything else
+  # is covered by the pull_request event once a PR exists.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
