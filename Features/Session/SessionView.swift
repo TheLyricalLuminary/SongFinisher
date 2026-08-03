@@ -1,5 +1,11 @@
 import SwiftUI
 import Domain
+// `UIApplication` (the Open Settings button below) lives in UIKit. SwiftUI generally
+// re-exports it on iOS, but relying on that is a needless bet in a target that has
+// yet to be compiled, and the import costs nothing where it does not apply.
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The main "Listening…" screen (docs/ARCHITECTURE.md §6). Works the same whether the
 /// melody came from a voice or an instrument plugged into the input device — everything
