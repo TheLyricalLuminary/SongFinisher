@@ -77,10 +77,14 @@ enum TemplateBank {
 
         // Short frames, for phrases of one or two syllables. Every frame above needs at
         // least three slots, so a one- or two-note phrase — a single strum on Sparse
-        // density, or a two-note hum — matched no template at all, the pool came back
-        // empty, and the session screen sat on "finding a line that fits…" forever with
-        // nothing to find. Short lines are also just good songwriting: a held one-word
-        // line over a single strum is a hook, not a degenerate case.
+        // density, or a two-note hum — matched no template at all. That did not fail
+        // loudly: `OfflineLyricProvider` has a last-resort sweep that widens the target
+        // until something fills, so the writer got a *three*-syllable line for their
+        // one-syllable phrase. Metrically wrong, silently — the one thing this app
+        // exists to get right. These frames let the sweep stay unused.
+        //
+        // Short lines are also just good songwriting: a held one-word line over a single
+        // strum is a hook, not a degenerate case.
         // Every two-slot frame here anchors on a closed-class word. `[adjective, noun]`
         // and `[article, noun]` were tried and dropped: with only two words there is no
         // surrounding structure to carry a Moby mistag, so they produced "his mock" and

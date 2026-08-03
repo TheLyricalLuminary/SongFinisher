@@ -53,8 +53,9 @@ final class SessionViewModel {
     private(set) var lastProviderKind: ProviderKind
     /// True while a request is actually in flight. Without this, "still working" and
     /// "finished and found nothing" are the same state on screen — an empty candidate
-    /// list — and the suggestion card's spinner runs forever with nothing coming. That
-    /// is not hypothetical: it is what a phrase with no matching template produced.
+    /// list — and the suggestion card's spinner would run with nothing coming. Providers
+    /// throw rather than return empty, so the remaining way to land there is the ranker
+    /// dropping every candidate below its quality threshold.
     private(set) var isGenerating = false
     private(set) var generationError: String?
     private(set) var sessionMemory = SessionMemory()
@@ -114,6 +115,12 @@ final class SessionViewModel {
     func start() {
         guard pipelineTask == nil else { return }
         resetTelemetry()
+        // Warm the generation model while the writer is still settling in front of
+        // the mic. Foundation Models lazy-loads on first use, and without this the
+        // session's very first phrase pays that cost as seconds of suggestion
+        // spinner — a cold start indistinguishable from a hang.
+        let lyrics = services.lyrics
+        Task { await lyrics.prewarm() }
         pipelineTask = Task { [weak self] in await self?.run() }
     }
 

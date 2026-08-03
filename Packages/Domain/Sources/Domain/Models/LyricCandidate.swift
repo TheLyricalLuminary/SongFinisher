@@ -1,11 +1,14 @@
 import Foundation
 
+/// Which engine wrote a line. Every case runs on the device — there is deliberately
+/// no remote case, because "audio never leaves the device" is an architectural fact
+/// here, not a policy promise. A future bundled-model tier (a quantized open-weights
+/// model for hardware without Apple Intelligence) would be a new on-device case
+/// behind the same seam.
 public enum ProviderKind: String, Sendable, Equatable, Codable {
     /// Apple's on-device Foundation Models framework — the premium path on
-    /// Apple Intelligence hardware. Nothing leaves the device.
+    /// Apple Intelligence hardware.
     case appleIntelligence
-    /// Remote Anthropic API — designed as an optional future provider; not shipped.
-    case claude
     /// The deterministic lexicon assembler — the universal fallback.
     case offline
 }

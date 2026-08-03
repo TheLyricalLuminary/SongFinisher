@@ -18,7 +18,7 @@ character — live, phrase by phrase.
 | `Packages/Domain` | Models, service protocols, pure logic — imports Foundation only |
 | `Packages/MelodyKit` | Real-time audio capture + DSP (YIN pitch, onsets, tempo, phrases) |
 | `Packages/LyricEngine` | Foundation Models (on-device) provider, offline provider, ranking pipeline |
-| `Packages/PersistenceKit` | SwiftData store (quarantined), Keychain |
+| `Packages/PersistenceKit` | SwiftData store (quarantined) |
 
 ## Building
 

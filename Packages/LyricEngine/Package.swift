@@ -1,8 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// LyricEngine owns the AI providers (Claude + offline) and the ranking pipeline.
-// It may import Domain and Foundation (URLSession) — never AVFoundation or SwiftData.
+// LyricEngine owns the AI providers (Foundation Models + offline) and the ranking
+// pipeline. It may import Domain and Foundation — never AVFoundation or SwiftData,
+// and nothing that talks to a network: generation is on-device by construction.
 let package = Package(
     name: "LyricEngine",
     platforms: [.iOS(.v17), .macOS(.v14)],

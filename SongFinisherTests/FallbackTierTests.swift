@@ -18,6 +18,26 @@ private struct FakeAIProvider: LyricProviding {
     }
 }
 
+/// Records whether the session asked it to warm up.
+private final class PrewarmSpy: LyricProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _prewarmed = false
+    var prewarmed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _prewarmed
+    }
+
+    var kind: ProviderKind { .appleIntelligence }
+
+    func prewarm() async {
+        lock.lock()
+        _prewarmed = true
+        lock.unlock()
+    }
+
+    func candidates(for spec: PhraseSpec, memory: SessionMemory) async throws(LyricProviderError) -> [LyricCandidate] { [] }
+}
+
 /// The offline assembler fits meter but has no model of meaning, so the session screen
 /// leads with word sparks — real words, chosen for the phrase's emotion, meaningful by
 /// construction — and demotes the assembled draft to a starting point. On the AI tier the
@@ -36,5 +56,22 @@ private struct FakeAIProvider: LyricProviding {
     @Test func premiumTierLeadsWithTheGeneratedLine() {
         let viewModel = SessionViewModel(services: .fakes(lyrics: FakeAIProvider()))
         #expect(viewModel.lastProviderKind == .appleIntelligence)
+    }
+
+    @Test func startingASessionWarmsTheGenerationModel() async throws {
+        // Foundation Models lazy-loads on first request. Without a warm-up kicked off
+        // when listening starts, that load lands on the writer's first phrase and shows
+        // as seconds of suggestion spinner — the first impression anyone gets of the app,
+        // including whoever is being demoed to.
+        let spy = PrewarmSpy()
+        let viewModel = SessionViewModel(services: .fakes(lyrics: spy))
+
+        viewModel.start()
+        defer { viewModel.stop() }
+
+        // `start` fires the warm-up as a detached task rather than blocking capture,
+        // so give the main actor a turn before asserting.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(spy.prewarmed, "starting a session did not warm the generation model")
     }
 }

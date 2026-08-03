@@ -1,7 +1,7 @@
 import Domain
 
-/// Marker for the LyricEngine layer. Claude/, Offline/, UpgradingLyricProvider,
-/// and RankingPipeline land here (see docs/ARCHITECTURE.md §9).
+/// Marker for the LyricEngine layer. The Foundation Models provider, the offline
+/// assembler, the lexicon, sparks, and ranking land here (docs/ARCHITECTURE.md §9).
 public enum LyricEngineInfo {
     public static let version = DomainInfo.version
 }

@@ -17,10 +17,12 @@ import Domain
     @Test("short phrases still get lines", arguments: [1, 2])
     func shortPhrasesProduceCandidates(syllables: Int) {
         // Every frame used to need three slots, so a one- or two-note phrase — one strum
-        // on Sparse density, or a two-note hum — matched no template, the pool came back
-        // empty, and the session screen sat on "finding a line that fits…" with nothing
-        // to find and no way out. The existing coverage all starts at 3, which is exactly
-        // why that shipped.
+        // on Sparse density, or a two-note hum — matched no template and this returned an
+        // empty pool. `OfflineLyricProvider` covered for it with a last-resort sweep that
+        // widens the target until something fills, so the writer silently got a line of
+        // the wrong length rather than an error. This asserts the assembler answers the
+        // question it was actually asked. The rest of the suite starts at 3 syllables,
+        // which is why the gap went unnoticed.
         let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
         let spec = Fixtures.spec(syllables: syllables, stress: pattern)
         let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: 11, poolTarget: 60)
