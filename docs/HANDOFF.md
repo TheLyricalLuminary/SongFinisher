@@ -1,10 +1,11 @@
 # Song Finisher — handoff
 
 Everything an agent picking this up cold needs: what the app is, how it actually works,
-where the traps are, and what is not done. Written 1 Aug 2026.
+where the traps are, and what is not done. Written 1 Aug, revised 3 Aug 2026.
 
-`docs/ARCHITECTURE.md` is the design reference and is still accurate — read it second.
-This document is the operational one: the things that bite.
+`docs/ARCHITECTURE.md` is the design reference — read it second, and note that its §9 was
+rewritten once already because it specified a cloud tier that was never built. This
+document is the operational one: the things that bite.
 
 ---
 
@@ -66,8 +67,9 @@ Two input modes, chosen automatically by `PolyphonyDetector`:
 `AppServices.bestAvailableLyricProvider` picks at composition time:
 
 - **Apple Intelligence hardware** → `FoundationModelsLyricProvider` (on-device LLM, iOS/macOS 26+).
-  Cards badge **ON-DEVICE AI**. First call has a real model-load cost — several seconds.
-  A user watching a spinner right after launch is usually watching a cold start, not a hang.
+  Cards badge **ON-DEVICE AI**. First call pays a real model-load cost — several seconds —
+  which is why `LyricProviding.prewarm()` (default no-op, overridden here) fires when a
+  listening session starts. A spinner right after launch is a cold start, not a hang.
 - **Everywhere else, and free users past their daily allowance** → `OfflineLyricProvider`,
   the deterministic assembler. Cards badge **OFFLINE DRAFT**.
 
@@ -75,6 +77,14 @@ The premium provider **falls back internally** on ineligible hardware, so
 `services.lyrics.kind` is what was *composed*, and `candidate.provider` is what *actually
 ran*. Only the latter is honest after the fact. `SessionViewModel.lastProviderKind` seeds
 from the former and corrects from the latter.
+
+**There is no third tier and no remote tier.** An Anthropic-backed cloud provider was
+designed and never built; `ProviderKind.claude`, `APIKeyProviding`, `HTTPPerforming` and
+the network error cases have all been deleted, so "audio never leaves the device" is a
+property of what exists rather than a promise. A bundled quantized open-weights model for
+non-Apple-Intelligence hardware is the anticipated third tier — one more `LyricProviding`
+conformance, still on-device. Its binding constraint is peak resident memory on a 4 GB
+A15, which nobody has measured.
 
 ---
 
@@ -157,6 +167,19 @@ Two rules make that safe:
 `undoLastAccepted()` is the safety net, bound to `U` so a Bluetooth page-turner pedal can
 drive it with a foot.
 
+### Showing the fit, not just computing it
+
+`MelodyFitView` on the suggestion card puts the melody's stress pattern and the line's on
+one axis, syllable by syllable, with a caption counting the agreement. It exists because
+the first question a songwriter asks is *"is this fitted to my melody, or guessing?"* and
+the app had no answer: both halves of the proof were on screen in different places, which
+asks the reader to hold two patterns in their head. Nobody does that, so the most
+distinctive thing the app does read as though it might be theatre.
+
+This is also why `SyllableCounter`'s accuracy is load-bearing beyond ranking: the fit is
+drawn position by position, so an over-counted syllable does not merely mis-score a line,
+it shifts every comparison after it.
+
 Earlier this behaviour committed the line only when the *next* phrase arrived. A writer
 who played one phrase and then stopped to look had kept nothing — the feature existed and
 was invisible. Do not reintroduce that ordering.
@@ -176,6 +199,27 @@ swift test --package-path Packages/PersistenceKit
 ```
 
 `SongFinisherTests` needs the Xcode project (`xcodegen generate`), not SwiftPM.
+
+### The lexicon is ground truth — use it
+
+`Resources/lexicon.bin` carries CMUdict-derived syllable counts, per-syllable stress, and
+per-syllable vowel openness for 35,346 words. Domain's heuristics — which cannot read it,
+since Domain may not import LyricEngine — can therefore be *measured* rather than argued
+about. Two real defects were found this way and both were shipped as fixes:
+
+| Heuristic | Was | Now |
+|---|---|---|
+| `SyllableCounter` syllable count | 83.1% exact | **88.1%** — "-ed" silent unless after t/d, consonant + "le" syllabic |
+| `SingabilityScorer` open vowel | 79.8% | **86.0%** — AY/EY/AW/OW/ER spellings, magic-e, final -y |
+
+The second mattered because the old rule called **sky, high, time, eye, my, try, fly,
+light, night** and **fire** closed — the words a singer actually holds — so the ranker was
+demoting the assembler's best picks for long notes.
+
+Before changing either heuristic, port it to Python, run it over the lexicon, and keep the
+change only if the number improves. A first attempt at the "-le" rule fired on any
+consonant plus "e", turned "shine" and "grace" into two syllables and made accuracy
+*worse* than the original; only the measurement caught it.
 
 ### Verifying without a Swift toolchain
 
@@ -236,6 +280,15 @@ Consequence: **nothing is verified by CI.** Every change needs a local run.
 - **`swift test` from `~` fails** with `chdir error` — `cd` into the repo first.
 - In agent containers, `download.swift.org` is blocked at the proxy (403). There is no way
   to get a toolchain; use the Python tools in §6.
+- **Signing lives in `Signing.xcconfig`, not in Xcode's UI.** `xcodegen generate` rewrites
+  the project file and discards whatever the Signing & Capabilities tab was set to, so a
+  fix made there survives until the next regeneration and then silently reverts. Both the
+  app and `SongFinisherWidgets` read the xcconfig; an extension that cannot sign fails the
+  whole install even when the app builds cleanly.
+- **On an unenrolled Apple ID the development profile expires after seven days.** The
+  installed app then stops launching and iOS shows *"app is no longer available"* over a
+  greyed-out icon. That is not a build failure. Delete the dead icon (a stub with an
+  invalid profile blocks the reinstall) and rebuild from Xcode.
 
 ---
 
@@ -250,8 +303,14 @@ Open work is PR #7.
 
 ## 10. What is not done
 
-- **The iOS target has never been built with the full feature set.** macOS has; iOS has not.
+- **The iOS target has never been built.** macOS has; iOS has not, not once. Everything
+  under `#if os(iOS)` — the Live Activity, App Intents, the widget extension, the Open
+  Settings buttons — is unproven. This is the single largest unknown in the project.
 - **A15 latency unvalidated** (§6).
+- **Vowel *identity* is not detected.** The app knows how long a note is and whether a word
+  is open, so it puts singable vowels on held notes. It does **not** hear *which* vowel was
+  sung — there is no formant analysis anywhere in MelodyKit. Matching the actual sung vowel
+  would need F1/F2 tracking, a vowel classifier, and a new field on `PhraseSpec`.
 - **Bio inconsistency**: the book says Sync Musica, the launch pack says Rexius Records.
   Apple verifies this — pick one before submitting.
 - **The repo is public**, which exposes `docs/APP_STORE*.md` and this file.
