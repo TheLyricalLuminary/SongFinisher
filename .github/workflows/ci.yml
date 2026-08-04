@@ -1,8 +1,12 @@
 name: CI
 
 on:
+  # `push` on every branch plus `pull_request` meant each commit to a PR branch
+  # started two identical runs — two checks, two notifications, one commit's worth
+  # of information. Pushes are watched on the default branch only; everything else
+  # is covered by the pull_request event once a PR exists.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -15,6 +19,25 @@ jobs:
   #
   # MelodyKit (AVFoundation/Accelerate) and the app target need macOS + Xcode and
   # are validated locally until macOS runners are enabled for the account.
+  #
+  # KNOWN RED, AND NOT FROM THIS FILE. Every run of this workflow, on every branch
+  # including main, is marked failed after ~2 seconds with runner_id 0, an empty
+  # runner_name, no steps recorded, and a 404 on the log download — while the same
+  # package tests pass locally. That is a job no runner ever picked up, not a job
+  # whose tests failed.
+  #
+  # Ruled out by experiment (runs #8 vs #9): removing the job-level `container:`
+  # and pulling the Swift image from an ordinary step instead changed nothing —
+  # identical runner_id 0 and identical 404. Job containers are set up before step
+  # logging begins, so they were the one part of this file capable of failing that
+  # silently, and they are not the cause. Nothing in the repository is.
+  #
+  # What still fits: hosted runners are unavailable to this account. Repository
+  # Settings → Actions → General, and the account's billing/spending limit, are
+  # where that gets resolved; a failed payment blocks Actions account-wide even on
+  # a public repo, where minutes are otherwise free. The built-in Pages deployment
+  # workflow does succeed, but it runs on GitHub-managed infrastructure and so does
+  # not prove hosted runners are reachable for ordinary jobs.
   linux-logic-tests:
     runs-on: ubuntu-latest
     container: swift:6.0

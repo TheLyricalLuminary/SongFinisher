@@ -1,5 +1,11 @@
 import SwiftUI
 import Domain
+// `UIApplication` (the Open Settings button below) lives in UIKit. SwiftUI generally
+// re-exports it on iOS, but relying on that is a needless bet in a target that has
+// yet to be compiled, and the import costs nothing where it does not apply.
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The main "Listening…" screen (docs/ARCHITECTURE.md §6). Works the same whether the
 /// melody came from a voice or an instrument plugged into the input device — everything
@@ -40,7 +46,39 @@ struct SessionView: View {
         viewModel.inputMode == .rhythmic || viewModel.currentPhrase?.isRhythmOnly == true
     }
 
+    /// True on the offline tier, whenever there is actually raw material to lead with.
+    private var leadsWithSparks: Bool {
+        viewModel.lastProviderKind == .offline && !(viewModel.currentSparks?.isEmpty ?? true)
+    }
+
+    private var suggestionCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if leadsWithSparks {
+                Text("OR START FROM A DRAFT")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            SuggestionCardView(
+                ranked: viewModel.rankedCandidates,
+                melodyPattern: viewModel.currentSpec?.budget.stressMap.pattern ?? [],
+                onUse: { viewModel.use($0) },
+                onMoreLikeThis: { viewModel.moreLikeThis($0) },
+                onRegenerate: { viewModel.regenerate() },
+                onDifferentEmotion: { viewModel.differentEmotion($0) },
+                onAdjustSyllables: { viewModel.adjustSyllableTarget(by: $0) }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var sparksSection: some View {
+        if let sparks = viewModel.currentSparks, !sparks.isEmpty {
+            SparksView(sparks: sparks)
+        }
+    }
+
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 ListeningHeader(state: viewModel.state, onToggle: toggleCapture)
@@ -91,22 +129,34 @@ struct SessionView: View {
                     DensityPicker(density: viewModel.density, onChange: { viewModel.setDensity($0) })
                 }
 
-                if showsFinalStressPattern {
-                    SuggestionCardView(
-                        ranked: viewModel.rankedCandidates,
-                        onUse: { viewModel.use($0) },
-                        onMoreLikeThis: { viewModel.moreLikeThis($0) },
-                        onRegenerate: { viewModel.regenerate() },
-                        onDifferentEmotion: { viewModel.differentEmotion($0) },
-                        onAdjustSyllables: { viewModel.adjustSyllableTarget(by: $0) }
-                    )
+                // Above the suggestion, not below it: the song being written is the
+                // subject of this screen, and the suggestion is what's being offered
+                // for the next line of it.
+                if !viewModel.sessionMemory.acceptedLines.isEmpty {
+                    SongSheetView(lines: viewModel.sessionMemory.acceptedLines)
+                }
 
-                    if let sparks = viewModel.currentSparks, !sparks.isEmpty {
-                        SparksView(sparks: sparks)
+                if showsFinalStressPattern {
+                    // Which half of the screen leads depends on which engine wrote the
+                    // line. The offline assembler fits meter but has no model of meaning
+                    // — it produces "warm in a doom" — so presenting its output as the
+                    // answer misrepresents what it is. The words are meaningful by
+                    // construction, so on that tier they lead and the draft sits under
+                    // them as a starting point. On the AI tier the line is genuinely the
+                    // answer and leads, as before.
+                    // The card carries its own loading state, so it is shown while a
+                    // request is genuinely in flight — but not once one has finished
+                    // empty-handed, where it would spin with nothing coming.
+                    let showsCard = viewModel.isGenerating || !viewModel.rankedCandidates.isEmpty
+                    if leadsWithSparks {
+                        sparksSection
+                        if showsCard { suggestionCard }
+                    } else {
+                        if showsCard { suggestionCard }
+                        sparksSection
                     }
                 }
 
-                AcceptedLinesStrip(lines: viewModel.sessionMemory.acceptedLines)
             }
             .padding(20)
         }
@@ -117,6 +167,15 @@ struct SessionView: View {
                 AccessibilityNotification.Announcement("New lyric lines ready").post()
             }
         }
+        // Follow the song down as it grows. Hands are on the instrument, so if the
+        // writer had to scroll to see what was just kept, the sheet would be no more
+        // use than the strip it replaced.
+        .onChange(of: viewModel.sessionMemory.acceptedLines.count) { _, _ in
+            guard let newest = viewModel.sessionMemory.acceptedLines.last else { return }
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(newest.id, anchor: .center)
+            }
+        }
         // Popping back to the library must release the mic/engine — a session screen is no
         // longer the permanent root, so leaving it has to tear capture down.
         .onDisappear { viewModel.stop() }
@@ -124,6 +183,7 @@ struct SessionView: View {
             if let proStore {
                 PaywallView(store: proStore)
             }
+        }
         }
     }
 
@@ -207,7 +267,7 @@ private struct FlowModeRow: View {
             }
             .toggleStyle(.switch)
             .fixedSize()
-            .accessibilityHint("When on, playing the next phrase keeps the current line automatically, so you never stop playing to accept one")
+            .accessibilityHint("When on, every suggested line is written onto your song sheet as it arrives, so you never stop playing to accept one")
 
             Spacer()
 
@@ -513,27 +573,46 @@ private struct SyllableMeterView: View {
 
 /// Last 3 accepted lines. Tapping through to the full song sheet is a later phase
 /// (docs/ARCHITECTURE.md §15 build plan item 6) — this is a passive recap for now.
-private struct AcceptedLinesStrip: View {
+/// The song as it is being written: every kept line, in order, growing downward.
+///
+/// This replaces a three-line footnote strip that sat below the suggestion and the word
+/// sparks. It was the only record that anything had been kept, it was truncated, and it
+/// was far enough down the screen to be invisible in practice — so a session felt like a
+/// sequence of disposable cards rather than a song accumulating. The sheet is the point
+/// of the app; it reads like a lyric page, and the newest line is emphasised because
+/// that is the one the writer just sang.
+private struct SongSheetView: View {
     let lines: [LyricLine]
 
     var body: some View {
-        if !lines.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("ACCEPTED")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("YOUR SONG SO FAR")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.tertiary)
-                ForEach(lines.suffix(3)) { line in
-                    Text(line.text)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Spacer()
+                Text("\(lines.count) \(lines.count == 1 ? "line" : "lines")")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Accepted lines")
-            .accessibilityValue(lines.suffix(3).map(\.text).joined(separator: ". "))
+            .accessibilityHidden(true)
+
+            ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
+                let isNewest = index == lines.count - 1
+                Text(line.text)
+                    .font(.system(isNewest ? .title3 : .body, design: .rounded,
+                                  weight: isNewest ? .semibold : .regular))
+                    .foregroundStyle(isNewest ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .id(line.id)
+            }
         }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Your song so far, \(lines.count) lines")
+        .accessibilityValue(lines.map(\.text).joined(separator: ". "))
     }
 }
 

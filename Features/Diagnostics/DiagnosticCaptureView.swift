@@ -1,5 +1,9 @@
 import SwiftUI
 import Domain
+// See SessionView: `UIApplication` is UIKit's, and this target has never been built.
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Brutalist, monospace live DSP telemetry — Task 4's real-hardware validation tool.
 /// No lyric generation; this view exists to make onset/pitch/segmentation quality on

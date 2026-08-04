@@ -37,6 +37,27 @@ xcodegen generate            # regenerate SongFinisher.xcodeproj whenever projec
 open SongFinisher.xcodeproj
 ```
 
+### Signing, and the seven-day clock
+
+Signing for both iOS targets comes from **`Signing.xcconfig`**, not from Xcode's Signing
+& Capabilities tab. `xcodegen generate` rewrites the project file and discards anything
+set through that tab, so a fix made there survives until the next regeneration and then
+silently vanishes. Set `DEVELOPMENT_TEAM` in the xcconfig once and it sticks.
+
+Both the app *and* `SongFinisherWidgets` need to sign. A widget that cannot sign fails
+the whole install even when the app itself builds cleanly, and it is the one people
+forget to look at.
+
+**On a free (unenrolled) Apple ID, the profile Xcode issues expires after seven days.**
+The app then stops launching and iOS shows *"app is no longer available"* over a greyed
+-out icon. Nothing is broken — rebuilding from Xcode re-signs it and it works again.
+Delete the dead icon from the phone first; a stub with an invalid profile can block the
+reinstall from landing.
+
+That clock is the strongest practical argument for enrolling: it is not only about
+TestFlight and the App Store (both of which require it), it is about not re-installing
+the app every week to keep it alive on the device you demo from.
+
 Then in Xcode:
 
 - **iPhone 13 (your phone) — the offline experience.** Select the `SongFinisher`

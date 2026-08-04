@@ -12,3 +12,7 @@ SongFinisher.xcodeproj/
 # generated lexicon.bin in LyricEngine/Resources IS committed)
 tools/.venv/
 tools/data/
+
+# Python bytecode from the verification tools
+__pycache__/
+*.pyc

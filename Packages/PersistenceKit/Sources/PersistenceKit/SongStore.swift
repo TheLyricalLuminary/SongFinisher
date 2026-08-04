@@ -69,6 +69,18 @@ public actor SongStore: SongStoring {
         try modelContext.save()
     }
 
+    /// Rewrites one line in place. The replacement carries a new `id` (it is a different
+    /// `LyricLine`), so the row's identity is updated too while its `sortIndex` — the
+    /// line's position in the song — is deliberately preserved.
+    public func replaceLine(id: UUID, with line: LyricLine, in songID: UUID) async throws {
+        guard let sd = try fetchSD(songID) else { throw SongStoreError.notFound }
+        guard let existing = sd.lines.first(where: { $0.id == id }) else { return }
+        existing.id = line.id
+        existing.lineData = try Self.encode(line)
+        sd.updatedAt = Date()
+        try modelContext.save()
+    }
+
     public func updateMemory(_ memory: SessionMemory, songID: UUID) async throws {
         guard let sd = try fetchSD(songID) else { throw SongStoreError.notFound }
         sd.memoryData = try Self.encode(memory)

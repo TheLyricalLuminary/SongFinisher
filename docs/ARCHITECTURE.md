@@ -13,7 +13,7 @@ long-running pipeline:
 AVAudioEngine tap → lock-free ring buffer → AnalysisWorker thread
   (YIN pitch / onset / tempo / phrase segmentation)
   → PhraseSpec (syllable budget + stress map + emotion)
-  → LyricProviding (Claude, offline fallback)
+  → LyricProviding (Foundation Models, offline fallback)
   → deterministic re-scoring + ranking → ViewModel → UI
 ```
 
@@ -32,10 +32,11 @@ Every arrow is an `AsyncStream` of a `Sendable` value type.
    `LanguageModelSession` + `@Generable` guided output, selected at composition time when
    `SystemLanguageModel` is available, per-request fallback to the offline assembler on any
    generation failure) — nothing leaves the device. The deterministic offline provider is
-   the universal fallback on non-Apple-Intelligence hardware. Claude (`claude-sonnet-5`,
-   structured outputs, prompt caching) remains a designed-but-unshipped optional remote
-   provider behind the same seam; the upgrade-in-place composition described in §9 applies
-   to it if it ever ships.
+   the universal fallback on non-Apple-Intelligence hardware. There is no remote provider
+   and no networking code anywhere in the app: "audio never leaves the device" is
+   enforced by what exists, not by policy. The seam's third-tier future is a *bundled*
+   quantized open-weights model for non-Apple-Intelligence hardware — still on-device,
+   added as one new `LyricProviding` conformance.
 6. **The model is never the judge of objective constraints**: syllables and stress are
    recounted on-device against a bundled CMU-dict subset; objective axes carry 70% of the
    ranking weight.
@@ -73,29 +74,32 @@ SongFinisher/
 │   │                                      #   SpectralFluxOnsetDetector, TempoEstimator,
 │   │                                      #   NoteSegmenter, PhraseSegmenter,
 │   │                                      #   AudioFileAnalyzer (memos), WaveformSampler
-│   ├── LyricEngine/                       # imports Domain, Foundation (URLSession)
+│   ├── LyricEngine/                       # imports Domain + Foundation only — no networking
 │   │   └── Sources/LyricEngine/
-│   │       ├── Claude/                    # ClaudeLyricProvider, wire DTOs, LyricSchema,
-│   │       │                              #   PromptBuilder (pure), AnthropicHTTPClient
-│   │       ├── Offline/                   # OfflineLyricProvider, ConstraintFiller,
-│   │       │                              #   phrase-bank.json (~2k stress-tagged templates)
-│   │       ├── UpgradingLyricProvider.swift  # offline-instantly + Claude-upgrades-in-place
-│   │       └── RankingPipeline.swift
+│   │       ├── FoundationModelsLyricProvider.swift  # Apple Intelligence tier (@Generable)
+│   │       ├── FoundationModelsPromptBuilder.swift  # pure prompt construction
+│   │       ├── OfflineLyricProvider.swift  # the universal fallback tier
+│   │       ├── PhraseAssembler.swift      # beam search over POS templates
+│   │       ├── Templates.swift            # the template bank
+│   │       ├── TriggerWords.swift         # the book's Trigger Word Library
+│   │       ├── LexiconStore.swift         # SFLX v1 reader
+│   │       ├── LexiconSparkProvider.swift # word sparks (curated + statistical tiers)
+│   │       ├── StressPatternIndex.swift   # syllable/POS/stress buckets
+│   │       ├── SuggestionRanker.swift     # MMR diversity selection
+│   │       └── Resources/lexicon.bin      # 35,346 words, built by tools/build_lexicon.py
 │   └── PersistenceKit/                    # imports Domain, SwiftData
-│       └── Sources/PersistenceKit/        # SongStore (@ModelActor), SDModels, DomainMapping,
-│                                          #   KeychainStore
+│       └── Sources/PersistenceKit/        # SongStore (@ModelActor), SDModels
 ├── Features/                              # app-target group — imports Domain + SwiftUI only
-│   ├── Session/                           # SessionView + VM, WaveformView, MoodBadge,
-│   │                                      #   TempoBadge, SyllableMeterView, SuggestionCardView
-│   ├── SongSheet/                         # SongSheetView + VM
-│   ├── MemoImport/                        # MemoImportView + VM
-│   ├── Settings/                          # SettingsView + VM (API key entry → Keychain)
-│   ├── Permissions/                       # MicPermissionView
-│   └── Common/                            # ErrorBanner, OfflineBadge
+│   ├── Session/                           # SessionView + VM, SongSheetView, WaveformView,
+│   │                                      #   badges, SyllableMeterView, SuggestionCardView
+│   ├── SongList/                          # SongListView + VM
+│   ├── SongSheet/                         # SongSheetView + VM (the saved song)
+│   ├── Purchases/                         # ProStore, PaywallView, GenerationAllowance
+│   ├── LiveActivity/                      # SessionActivityController + attributes
+│   ├── Intents/                           # StartSessionIntent (App Intents / Siri)
+│   ├── Onboarding/, Diagnostics/, Common/
 └── SongFinisherTests/                     # + per-package test targets
-    ├── Fixtures/Audio/                    # synthesized + real hummed WAVs, 16 kHz mono
-    ├── Fixtures/JSON/                     # recorded Claude responses, golden prompts
-    └── (Domain/DSP/LyricEngine/Persistence/ViewModel suites)
+    └── (Domain / MelodyKit / LyricEngine / PersistenceKit / app suites)
 ```
 
 ## 3. Module boundaries
@@ -112,8 +116,8 @@ MelodyKit │ LyricEngine │ PersistenceKit   — peers; NEVER import each othe
 Domain                             — imports Foundation only; all protocols + models + pure logic
 ```
 
-- Wire types (`ClaudeRequest`, `SDSong`) are `internal` to their packages; only Domain types
-  cross boundaries.
+- Persistence types (`SDSong`, `SDLyricLine`) are `internal` to their package; only Domain
+  types cross boundaries.
 - MelodyKit doesn't know lyrics exist; LyricEngine doesn't know microphones exist. The
   `PhraseSpec` connects them, and the connecting code lives in `SessionViewModel`.
 - Swift 6 language mode (full data-race safety) in every target from the first commit.
@@ -157,7 +161,7 @@ struct PhraseSpec {                       // the single value handed to the AI l
     let variationSeedText: String?           // [More Like This]
 }
 
-enum ProviderKind: String { case claude, offline }
+enum ProviderKind: String { case appleIntelligence, offline }   // both on-device
 struct LyricCandidate { let id: UUID; let phraseID: UUID; let text: String
     let syllableCount: Int                // recomputed on-device — never trusted
     let stressAlignment: [Stress]         // dict-derived
@@ -256,10 +260,6 @@ protocol PermissionChecking: Sendable {
     func currentMicPermission() async -> MicPermission   // undetermined/granted/denied
     func requestMicPermission() async -> MicPermission
 }
-protocol APIKeyProviding: Sendable { func anthropicKey() throws -> String }  // Keychain
-protocol HTTPPerforming: Sendable {                      // testability seam under Claude client
-    func perform(_ r: URLRequest) async throws -> (Data, HTTPURLResponse)
-}
 ```
 
 Composition root: `AppServices` struct of protocol existentials, built once in
@@ -284,8 +284,7 @@ SongFinisherApp (@main)
             │   │   └── "+1 / −1 syllable" chips      // escape hatch for budget errors
             │   └── AcceptedLinesStrip                // last 3 accepted → SongSheet
             ├── SongSheetView ── SongSheetViewModel   // full sheet, sections, hook flag, export
-            ├── MemoImportView ── MemoImportViewModel // .fileImporter → progress → phrase cards
-            └── SettingsView ── SettingsViewModel     // API key (Keychain), provider status, data delete
+            └── SongListView ── SongListViewModel     // library, resume a session, delete
 ```
 
 All ViewModels are `@MainActor @Observable`, init-injected with protocols, never importing
@@ -307,8 +306,8 @@ but a third-party dep for a few hundred rows), and JSON files (partial-write ris
 - `VersionedSchema` + empty `MigrationPlan` registered from day one.
 - Raw live audio is **never persisted** (privacy). Memo audio → `Application Support/Memos/`;
   memo analyses cached as Codable JSON keyed by file SHA-256 so re-imports are instant.
-- Anthropic API key → Keychain (`AfterFirstUnlockThisDeviceOnly`); BYO-key in MVP,
-  `APIKeyProviding` seam means a token-vending proxy later touches one file.
+- No credentials are stored, because there is no service to authenticate against: every
+  generation tier runs on the device.
 
 ## 8. Audio pipeline
 
@@ -381,55 +380,47 @@ after warm-up).
 | Phrase-end confirmation (silence gate) | +350 ms after last note |
 | Budget/stress/emotion (pure math) | < 10 ms |
 | **Offline placeholder suggestion on screen** | **≈ 400 ms after phrase ends** |
-| Claude round trip (cached prompt, ~500 output tokens) | 1.5–3 s p50–p90; upgrades card in place |
+| Foundation Models generation (on-device, warmed) | sub-second typical; **first call pays model load unless prewarmed** |
 
 ## 9. AI integration layer
 
-**Composition:** `UpgradingLyricProvider(primary: Claude, instant: Offline)` — offline
-candidates render **immediately** as a badged placeholder; when Claude answers (6 s total
-timeout, one retry on 429/5xx with jittered backoff honoring `retry-after`), the card upgrades
-in place *unless the user already acted*. `CancellationError` never triggers fallback.
+**Every tier runs on the device. There is no remote provider, no API key, and no
+networking code anywhere in the app** — the privacy claim is a property of what exists,
+not a policy promise. What follows describes the shipped design; an earlier revision of
+this document specified an Anthropic-backed cloud tier that was **never built** and whose
+scaffolding has since been deleted.
 
-**Request** (`POST https://api.anthropic.com/v1/messages`, headers `x-api-key`,
-`anthropic-version: 2023-06-01`):
+**Composition** (`AppServices.bestAvailableLyricProvider`, chosen once at launch):
 
-```json
-{
-  "model": "claude-sonnet-5",
-  "max_tokens": 1500,
-  "thinking": { "type": "disabled" },
-  "output_config": {
-    "effort": "low",
-    "format": { "type": "json_schema", "schema": {
-      "type": "object", "additionalProperties": false, "required": ["candidates"],
-      "properties": {
-        "candidates": { "type": "array", "items": {
-          "type": "object", "additionalProperties": false,
-          "required": ["text", "syllable_check", "emotional_fit", "memorability"],
-          "properties": {
-            "text": { "type": "string" },
-            "syllable_check": { "type": "string",
-              "description": "the line split by syllables with hyphens, e.g. 'all the miles be-tween us'" },
-            "emotional_fit": { "type": "number" },
-            "memorability": { "type": "number" } } } },
-        "theme_observation": { "type": "string" } } } }
-  },
-  "system": [ { "type": "text",
-      "text": "<FROZEN lyricist system prompt: craft rules (singable > clever, open vowels on long/strong notes, no forced rhyme, banned-cliché list), S/w stress notation spec with worked examples, 'make the 8 candidates take different angles'. Byte-identical every request.>",
-      "cache_control": { "type": "ephemeral" } } ],
-  "messages": [ { "role": "user", "content": [
-      { "type": "text", "text": "<song_memory>…compact JSON, stable key order…</song_memory>",
-        "cache_control": { "type": "ephemeral" } },
-      { "type": "text", "text": "<phrase_features>{\"syllable_budget\":7,\"tolerance\":0,\"stress_pattern\":\"SwSwwSw\",\"tempo_bpm\":92,\"tempo_confidence\":0.71,\"emotions\":[{\"longing\":0.46},{\"melancholy\":0.22},{\"reflection\":0.15}],\"contour\":\"arch\",\"note_durations_ms\":[420,180,410,190,200,640,380],\"long_note_slots\":[0,5]}</phrase_features>\nIntent: fresh\nGenerate 8 distinct candidates." } ] } ]
-}
-```
+| Tier | When | Badge |
+|---|---|---|
+| `FoundationModelsLyricProvider` | `SystemLanguageModel` available — Apple Intelligence hardware | ON-DEVICE AI |
+| `OfflineLyricProvider` | everywhere else, and once a free user's daily premium budget is spent | OFFLINE DRAFT |
 
-**Deliberate contract choices** (all pinned by CI contract tests): **no** `temperature`/`top_p`
-(rejected on this model family — variety is elicited in the prompt), no prefill, thinking
-disabled + effort low for latency, non-streaming (schema'd JSON must be complete before ranking
-anyway). Two cache breakpoints: frozen system prompt + memory block (memory only mutates on
-accept/reject, so Regenerate bursts stay cache-warm). `syllable_check` hyphenation is forced
-chain-of-thought that measurably improves compliance — **and is still never trusted**.
+The premium provider holds the offline one as its `fallback` and degrades **per request**:
+a guardrail refusal, context overflow, or empty batch returns offline candidates rather
+than an error banner, because a musician mid-flow should never be interrupted by a
+generation that balked at one phrase. `CancellationError` never triggers fallback.
+
+Because the tier is chosen at composition time but the premium path can fall back
+internally, `services.lyrics.kind` reports what was *composed* and `candidate.provider`
+reports what actually *ran*. Only the latter is trustworthy after the fact, and it is what
+badges the card.
+
+**A third tier is anticipated but not built**: a bundled quantized open-weights model for
+hardware without Apple Intelligence, so every device gets real generation. It is one new
+`LyricProviding` conformance — still on-device. The binding constraint is peak resident
+memory on a 4 GB A15, which is unmeasured.
+
+**Cold start:** Foundation Models lazy-loads on first request, which surfaced in real
+sessions as seconds of suggestion spinner on the very first phrase. `LyricProviding.prewarm()`
+(default no-op; overridden by the Foundation Models tier) is fired when a listening session
+starts, so the load happens while the writer is still settling in front of the mic.
+
+**Structured output:** `LanguageModelSession` + `@Generable` guided generation constrains
+decoding to `GeneratedLyricBatch`, so there is no JSON parsing and no malformed-response
+path. Sessions are per-request and stateless — all cross-phrase continuity travels in the
+prompt via `SessionMemory`.
 
 **Response handling:** `stop_reason` first (`refusal` → fallback; `max_tokens` → salvage
 complete candidates from partial JSON), decode, clamp scores, then **recount every candidate's
@@ -449,14 +440,38 @@ float), `singability` (open vowels on long notes, consonant-cluster penalties), 
 (rhyme-tail match +, motif echo +, near-verbatim copy −). From LLM, clamped — `emotionalFit`,
 `memorability`. Weights in a plist. `syllableFit < 0.3` is a hard drop.
 
-**Offline provider:** ~2,000 bundled templates keyed by (syllable count × stress signature ×
-emotion), slots filled from stress-tagged word banks biased toward session themes; **outputs
-satisfy the stress map by construction**; seeded RNG (`phraseID ^ attempt`) so Regenerate
-varies deterministically and tests are exact-match. Never errors, always ≥ 3 candidates.
+**Offline provider:** a template bank filled by **beam search over a 35,346-word lexicon**
+(`Resources/lexicon.bin`, SFLX v1 — CMUdict pronunciations + Moby POS + wordfreq Zipf +
+VADER valence, built by `tools/build_lexicon.py`). Templates are POS frames; the beam lays
+words down left-to-right scoring stress-on-strong-beat, open-vowel-on-long-note and
+consonant-cluster-on-fast-note, so **outputs satisfy the stress map by construction**.
+Seeded RNG (`phraseID ^ attempt`) so Regenerate varies deterministically and tests are
+exact-match. Never errors.
 
-**Cost:** ~1.9k tokens uncached first call ≈ $0.013; subsequent ≈ $0.008/call (90% cache
-reads); typical 25-call session ≈ **$0.22**. Soft cap ~60 calls/session → toast +
-fallback-only mode.
+A frame only applies when `minSyllables <= target <= maxSyllables`, so the bank must cover
+the whole range a phrase can ask for. When it doesn't, a last-resort sweep widens the
+target until something fills — which never errors but *silently answers a different
+question*, handing back a three-syllable line for a one-syllable phrase. Coverage at the
+short end matters precisely because the failure is quiet.
+
+**Moby's POS tags are dirty and most of the guard code exists because of it**: it tags "a"
+as a noun, "your" as an adjective, "l" as a noun, and those are the highest-frequency words
+in English, so they head every Zipf-sorted bucket. Every guard (`contentSlotStopWords`,
+articles barred from non-article slots, inflected forms barred from bare-verb slots, single
+letters and profanity barred, and `isAcceptable`'s adjacent-pair grammar) is load-bearing
+and has a regression test. These membership tests run in the innermost beam loop, so they
+are `Set<Int>` of lexicon row numbers resolved once — never `Set<String>`.
+
+**Word sparks:** a word-level assembler cannot guarantee *meaning*, so on the offline tier
+the session screen leads with **sparks** — evocative words that fit the phrase's emotion and
+beat — and demotes the generated line beneath them. `LexiconSparkProvider` fills two tiers in
+order: curated vocabulary from the book's Trigger Word Library, *shuffled* with the phrase
+seed, then statistical picks. Ranking the curated tier instead of shuffling it froze the
+panel to the same six words every phrase.
+
+**Cost:** zero. Generation is on-device on every tier; there is no per-request cost and no
+usage cap beyond the free tier's daily premium budget, which exists to price the product,
+not to pay for inference.
 
 **Voice Memo Resurrection:** `.fileImporter` (m4a/wav/mp3) → same DSP chain at ~15–20× real
 time with progress → phrases → DTW contour clustering (32-point resampled) → sections
@@ -473,7 +488,7 @@ Five isolation domains, Swift 6 data-race safety from day one:
 3. **`@MainActor`** — ViewModels + SwiftUI; consumers in `.task {}`-scoped `for await` loops;
    explicit `cancelTasks()` on disappear.
 4. **`@ModelActor SongStore`** — the only code touching `ModelContext`.
-5. **Cooperative pool** — Claude/offline providers as stateless `Sendable` structs;
+5. **Cooperative pool** — both lyric providers as stateless `Sendable` structs;
    cancellation checked before decode so a superseded phrase never overwrites newer UI state.
 
 No `DispatchQueue` outside AVAudioSession notification handling; no locks or semaphores
@@ -502,7 +517,7 @@ coverage, services ≥ 80%.
    request-shape contract tests (no `temperature` key, thinking disabled,
    `additionalProperties: false` at every level); memory caps enforced in rendered prompts;
    fallback/upgrade policy tests with an injected `Clock`; offline provider exact-match via
-   seeded RNG, and the phrase-bank CI harness (every template must satisfy its own stress
+   seeded RNG, and the template CI harness (every template must satisfy its own stress
    signature).
 4. **ViewModels with `AppServices.fakes()`:** state-machine walks, supersession/cancellation
    via spies, accept-persists/regenerate-records-rejection, offline badge without error state,
@@ -511,8 +526,9 @@ coverage, services ≥ 80%.
    tolerance, concurrent-append serialization.
 
 Not unit-tested (deliberately): AVAudioEngine wiring (debug diagnostics screen + manual QA),
-SwiftUI bodies (previews + VM tests), live API (one opt-in `ANTHROPIC_LIVE_TEST=1` integration
-test tracking gate pass-rate before releases).
+SwiftUI bodies (previews + VM tests), and Foundation Models generation itself (its
+availability is hardware-dependent, so suites exercise the seam with fakes and validate the
+deterministic offline tier exhaustively).
 
 ## 12. Permissions & error states
 
@@ -535,10 +551,10 @@ time" hint.
 | 2 Phrase segmentation | PhraseSegmenter (silence/cadence/timeout, tentative-end) |
 | 3 Syllable budget | StressMapDeriver + tolerance widening |
 | 4 Emotional classification | EmotionFeatureScorer, 8 labels + confidences |
-| 5 Candidate generation | LyricProviding (Claude + offline), 8-candidate over-generation |
+| 5 Candidate generation | LyricProviding (Foundation Models + offline), 8-candidate over-generation |
 | 6 Ranking engine | RankingPipeline, 6 scores, deterministic veto |
 | 7 Song memory | SessionMemory + SongStoring + prompt injection with caps |
-| 8 Voice Memo Resurrection | AudioFileAnalyzer + DTW sections/hooks + MemoImport UI |
+| 8 Voice Memo Resurrection | AudioFileAnalyzer + DTW sections/hooks — **not built** |
 
 ## 14. Top risks & mitigations
 
@@ -565,7 +581,8 @@ time" hint.
    pitch screen.
 4. **Offline loop** — ProsodyDeriving → OfflineLyricProvider → ranking → SessionView. *The
    whole product works in airplane mode at this point.*
-5. **Claude** — provider, prompt goldens, contract tests, upgrade-in-place, Settings/Keychain.
+5. **Foundation Models** — provider, prompt goldens, `@Generable` contract, per-request
+   fallback to the offline tier, `prewarm()` on session start.
 6. **Memory + persistence** — SongStore, SongSheet, session list.
 7. **Voice Memo Resurrection.**
 8. **Hardening** — error states, latency tuning, release-gate corpus run.

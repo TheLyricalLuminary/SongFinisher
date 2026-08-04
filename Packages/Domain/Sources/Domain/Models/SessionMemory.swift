@@ -75,6 +75,25 @@ public struct SessionMemory: Sendable, Equatable, Codable {
         self.rhymeTails = rhymeTails
     }
 
+    /// Writes `line` onto the sheet, keyed by the phrase it belongs to, and returns the
+    /// line it displaced (`nil` if it was appended).
+    ///
+    /// One line per phrase is what makes automatic keeping usable: a phrase's line is
+    /// recorded the moment it arrives, and [Regenerate], [More Like This], [Different
+    /// Emotion] and the syllable nudges all produce a *replacement* for that same
+    /// phrase rather than another entry. Appending blindly would turn a writer who
+    /// fiddled with one line into six copies of it.
+    @discardableResult
+    public mutating func record(_ line: LyricLine) -> LyricLine? {
+        guard let index = acceptedLines.firstIndex(where: { $0.phraseID == line.phraseID }) else {
+            acceptedLines.append(line)
+            return nil
+        }
+        let replaced = acceptedLines[index]
+        acceptedLines[index] = line
+        return replaced
+    }
+
     /// FIFO-capped view used when building a prompt (docs/ARCHITECTURE.md §9 memory caps).
     public var promptAcceptedLines: [LyricLine] { Array(acceptedLines.suffix(Self.maxAcceptedLinesInPrompt)) }
     public var promptRejected: [RejectedLine] { Array(rejected.suffix(Self.maxRejectedInPrompt)) }

@@ -55,8 +55,11 @@ targets:
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        DEVELOPMENT_TEAM: 473RT92HDB
-        CODE_SIGN_STYLE: Automatic
+    # Signing lives in Signing.xcconfig so it survives `xcodegen generate`, which
+    # discards whatever Xcode's Signing & Capabilities tab was set to.
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
 
   # The Live Activity host (lock screen + Dynamic Island). Compiles the shared
   # SessionActivityAttributes so the app and the widget agree on the activity contract.
@@ -76,8 +79,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.songfinisher.app.widgets
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: false
-        DEVELOPMENT_TEAM: 473RT92HDB
-        CODE_SIGN_STYLE: Automatic
+    # Same signing identity as the app — a widget that cannot sign fails the whole
+    # install, even when the app itself is fine.
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
 
   SongFinisherTests:
     type: bundle.unit-test

@@ -33,6 +33,22 @@ public struct FoundationModelsLyricProvider: LyricProviding, Sendable {
         return false
     }
 
+    /// Kicks off the system model's asset load ahead of the first phrase. Foundation
+    /// Models lazy-loads on first request, and that showed up in real sessions as
+    /// several seconds of "finding a line that fits…" on the very first phrase — a
+    /// cold start indistinguishable on screen from a slow generation. Sessions here
+    /// are per-request and stateless, so the warmed session itself is discarded; the
+    /// asset load it triggers is system-level and outlives it.
+    public func prewarm() async {
+        guard Self.isModelAvailable else { return }
+        // Built with the same frozen instructions every request uses, so the framework
+        // warms the prefix this provider will actually send. The session itself is
+        // discarded — `candidates` opens a fresh one per request — but the asset load
+        // it triggers is system-level and outlives it.
+        let session = LanguageModelSession(instructions: FoundationModelsPromptBuilder.instructions())
+        session.prewarm()
+    }
+
     public func candidates(for spec: PhraseSpec, memory: SessionMemory) async throws(LyricProviderError) -> [LyricCandidate] {
         do {
             // A fresh session per request: providers are stateless Sendable structs

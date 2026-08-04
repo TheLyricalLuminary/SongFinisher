@@ -82,3 +82,44 @@ import Testing
         #expect(words == ["don't", "stop", "please"])
     }
 }
+
+/// Two endings a bare vowel-group count gets wrong, both ubiquitous in lyrics. The ranker
+/// recounts every candidate with this heuristic and drops lines whose syllable fit misses,
+/// so an over-count here rejects good lines and mis-shapes the stress pattern the melody
+/// is matched against — it is the app's central promise, measured.
+///
+/// Every expectation below was checked against the bundled lexicon's CMUdict counts, and
+/// every word takes the heuristic path rather than the pinned dictionary.
+@Suite struct SyllableSuffixTests {
+
+    @Test("\"-ed\" is silent unless it follows t or d",
+          arguments: [("walked", 1), ("abandoned", 3), ("absorbed", 2), ("abused", 2),
+                      ("wanted", 2), ("needed", 2), ("started", 2)])
+    func edSuffix(word: String, expected: Int) {
+        #expect(SyllableCounter.syllableCount(of: word) == expected,
+                "'\(word)' should be \(expected) syllables")
+    }
+
+    @Test("a consonant before a final \"le\" makes it a syllable",
+          arguments: [("able", 2), ("little", 2), ("gentle", 2), ("whole", 1), ("style", 1)])
+    func leSuffix(word: String, expected: Int) {
+        #expect(SyllableCounter.syllableCount(of: word) == expected,
+                "'\(word)' should be \(expected) syllables")
+    }
+
+    @Test func shortEdWordsAreNotMisread() {
+        // "red" and "bed" end in "ed" but it is the whole vowel, not a suffix.
+        #expect(SyllableCounter.syllableCount(of: "red") == 1)
+        #expect(SyllableCounter.syllableCount(of: "bed") == 1)
+    }
+
+    @Test func theStressPatternIsAsLongAsTheSyllableCount() {
+        // The melody fit lines these up position by position, so a disagreement here would
+        // silently shift every comparison the card draws.
+        for word in ["walked", "abandoned", "able", "little", "wanted"] {
+            let pattern = SyllableCounter.stressPattern(of: word)
+            #expect(pattern.count == SyllableCounter.syllableCount(of: word),
+                    "'\(word)' stress pattern and syllable count disagree")
+        }
+    }
+}
