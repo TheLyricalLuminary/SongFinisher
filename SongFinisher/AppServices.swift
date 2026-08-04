@@ -23,6 +23,11 @@ struct AppServices: Sendable {
     let permissions: any PermissionChecking
     let store: any SongStoring
 
+    /// False when the best available engine IS the offline assembler (hardware with no
+    /// AI tier): there is nothing premium to meter, and upsell UI must not promise AI
+    /// lines this device can't produce.
+    var premiumLyricsAvailable: Bool { lyrics.kind != .offline }
+
     /// A missing bundled lexicon means the build is broken, not a runtime condition —
     /// `try!` here is deliberate (docs/ARCHITECTURE.md §12 error taxonomy governs
     /// *runtime* failures like mic denial; a corrupt app bundle is a different class

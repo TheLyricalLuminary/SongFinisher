@@ -7,6 +7,10 @@ import StoreKit
 /// alongside the subscription group and Apple's stock view can't mix the two.
 struct PaywallView: View {
     let store: ProStore
+    /// False on hardware whose best engine is the offline assembler (no AI tier): the
+    /// headline benefit must not promise AI lines this device can't produce, and the
+    /// pitch shifts to supporting the tool + unlocking AI on a future device.
+    let premiumLyricsAvailable: Bool
 
     @Environment(\.dismiss) private var dismiss
 
@@ -36,10 +40,13 @@ struct PaywallView: View {
                 .font(.footnote)
                 .tint(.secondary)
 
-                Text("Offline draft suggestions are always free and unlimited.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
+                // Redundant when the no-AI-tier note above already says drafts are free.
+                if premiumLyricsAvailable {
+                    Text("Offline draft suggestions are always free and unlimited.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
             }
             .padding(24)
         }
@@ -69,13 +76,31 @@ struct PaywallView: View {
                 .font(.title.weight(.bold))
 
             VStack(alignment: .leading, spacing: 10) {
-                benefit("infinity", "Unlimited AI lines, matched to your melody")
+                if premiumLyricsAvailable {
+                    benefit("infinity", "Unlimited AI lines, matched to your melody")
+                } else {
+                    benefit("infinity", "Unlimited AI lines on Apple Intelligence devices")
+                }
                 benefit("iphone.and.arrow.forward", "Everything stays on your device — no account")
                 benefit("square.and.arrow.up", "Support an independent songwriting tool")
             }
             .padding(.top, 4)
+
+            if !premiumLyricsAvailable {
+                noAITierNote
+            }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// Sold honestly on hardware that can't run the AI tier: what this device gets
+    /// (the full free scaffold), and what Pro actually buys here.
+    private var noAITierNote: some View {
+        Text("This device doesn't support Apple Intelligence, so AI lines can't run here — your melody-matched drafts, rhymes, and word sparks are free and unlimited. Going Pro supports development today and unlocks AI lines automatically on a supported device.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.top, 8)
     }
 
     private func benefit(_ icon: String, _ text: String) -> some View {
