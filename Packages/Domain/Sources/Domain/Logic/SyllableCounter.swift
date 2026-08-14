@@ -62,6 +62,34 @@ public enum SyllableCounter {
         "aeiouy".contains(character)
     }
 
+    /// Whether a word's final `l` is syllabic — the `l` *is* the vowel of its own syllable,
+    /// as in "little", "gentle", "bubbled", "handled".
+    ///
+    /// Both suffix rules below hinge on this same question, from opposite directions: a
+    /// syllabic `l` means a final "-le" keeps a syllable the silent-e rule would have taken,
+    /// and it means a final "-led" keeps the one the "-ed" rule would have taken. Measured
+    /// over the lexicon, sharing the test is worth 0.4 points of exact accuracy against
+    /// handling only the "-le" side.
+    private static func hasSyllabicL(_ letters: [Character]) -> Bool {
+        let lIndex: Int
+        if letters.count >= 3, letters[letters.count - 1] == "e",
+           letters[letters.count - 2] == "l" {
+            lIndex = letters.count - 2            // "little", "gentle"
+        } else if letters.count >= 4, letters[letters.count - 1] == "d",
+                  letters[letters.count - 2] == "e", letters[letters.count - 3] == "l" {
+            lIndex = letters.count - 3            // "bubbled", "handled"
+        } else {
+            return false
+        }
+        guard lIndex >= 1 else { return false }
+        let preceding = letters[lIndex - 1]
+        // A vowel before it keeps the e silent and the l ordinary: "whole", "style", "fueled".
+        // So does a second l: "-lle" is the French and proper-noun ending — "belle",
+        // "Michelle", every "-ville" town name — and it is never syllabic. Its "-led" form
+        // is ordinary too, which is what keeps "called", "filled" and "pulled" at one.
+        return !isVowelLetter(preceding) && preceding != "l"
+    }
+
     /// Standard vowel-group heuristic for out-of-dictionary words: count runs of vowels,
     /// drop a trailing silent "e", and fold common unstressed suffixes so the count doesn't
     /// over-report. Stress defaults to first-syllable-strong for 1–2 syllables (the dominant
@@ -84,27 +112,29 @@ public enum SyllableCounter {
         if !current.isEmpty { groups.append(current) }
 
         // Two endings that a bare vowel-group count gets wrong, and both are everywhere in
-        // song lyrics. Measured against the bundled lexicon's CMUdict counts over its
-        // 23,776 common words, handling them takes this heuristic from 83.1% exact to
-        // 88.1%, and cuts off-by-one from 16.4% to 11.4%.
+        // song lyrics. Measured against the bundled lexicon's CMUdict counts (run
+        // `python3 tools/verify_syllables.py --compare`), handling them takes this
+        // heuristic from 82.5% exact to 87.8% over the lexicon's 34,563 alphabetic words,
+        // and cuts off-by-one from 17.0% to 11.7%.
         var count = groups.count
         let endsInBareE = letters.last == "e" && groups.count > 1 && groups.last == ["e"]
+        let syllabicL = hasSyllabicL(letters)
 
         if word.hasSuffix("ed"), letters.count > 3, groups.count > 1, groups.last == ["e"] {
             // "-ed" is only its own syllable after t or d — "wanted", "needed", "started".
             // Everywhere else it is silent: "walked" is one syllable, "abandoned" three.
             // Counting it always was the single largest source of over-reporting.
+            //
+            // A syllabic l survives the elision, though: "bubbled" and "handled" lose the
+            // e and stay at two, because the l is still carrying a syllable of its own.
             let preceding = letters[letters.count - 3]
-            if preceding != "t" && preceding != "d" { count -= 1 }
+            if preceding != "t", preceding != "d", !syllabicL { count -= 1 }
         } else if endsInBareE {
             // Silent trailing "e": "shine", "grace", "fire".
             count -= 1
-            // ...except a consonant before a final "le", where the l is syllabic and the
-            // syllable is real: "able", "little", "gentle". A vowel there keeps it silent,
-            // so "whole" and "style" stay at one.
-            if word.hasSuffix("le"), letters.count >= 3, !isVowelLetter(letters[letters.count - 3]) {
-                count += 1
-            }
+            // ...except over a syllabic l, where the syllable is real: "able", "little",
+            // "gentle".
+            if syllabicL { count += 1 }
         }
         count = max(1, count)
         var pattern = [Stress](repeating: .weak, count: count)

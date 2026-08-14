@@ -88,8 +88,10 @@ import Testing
 /// so an over-count here rejects good lines and mis-shapes the stress pattern the melody
 /// is matched against — it is the app's central promise, measured.
 ///
-/// Every expectation below was checked against the bundled lexicon's CMUdict counts, and
-/// every word takes the heuristic path rather than the pinned dictionary.
+/// Every expectation below was checked against the bundled lexicon's CMUdict counts via
+/// `python3 tools/verify_syllables.py`. Most of these words are out of the pinned
+/// dictionary and so exercise the heuristic directly; the last case is the deliberate
+/// exception, covering words the heuristic cannot reach and the dictionary answers.
 @Suite struct SyllableSuffixTests {
 
     @Test("\"-ed\" is silent unless it follows t or d",
@@ -103,6 +105,41 @@ import Testing
     @Test("a consonant before a final \"le\" makes it a syllable",
           arguments: [("able", 2), ("little", 2), ("gentle", 2), ("whole", 1), ("style", 1)])
     func leSuffix(word: String, expected: Int) {
+        #expect(SyllableCounter.syllableCount(of: word) == expected,
+                "'\(word)' should be \(expected) syllables")
+    }
+
+    @Test("a syllabic l survives the \"-ed\" elision",
+          arguments: [("bubbled", 2), ("handled", 2), ("settled", 2), ("troubled", 2),
+                      ("assembled", 3)])
+    func syllabicLBeforeEd(word: String, expected: Int) {
+        // "handled" is HAND-uhld: the e goes, the l keeps its syllable. Treating "-ed" as
+        // unconditionally silent collapsed this whole family — every "-le" verb in the past
+        // tense — to one syllable too few.
+        #expect(SyllableCounter.syllableCount(of: word) == expected,
+                "'\(word)' should be \(expected) syllables")
+    }
+
+    @Test("a doubled l is never syllabic",
+          arguments: [("belle", 1), ("nashville", 2), ("michelle", 2),
+                      ("called", 1), ("filled", 1), ("pulled", 1)])
+    func doubledLIsNotSyllabic(word: String, expected: Int) {
+        // "-lle" is the French and proper-noun ending, and its past tense is ordinary.
+        // Without this the syllabic-l rule would have read "called" as two syllables —
+        // a common enough lyric word to matter on its own.
+        #expect(SyllableCounter.syllableCount(of: word) == expected,
+                "'\(word)' should be \(expected) syllables")
+    }
+
+    @Test("the adjectival \"-ed\" and the \"-sle\" trap are pinned, not guessed",
+          arguments: [("naked", 2), ("wicked", 2), ("sacred", 2), ("crooked", 2),
+                      ("rugged", 2), ("ragged", 2), ("wretched", 2),
+                      ("aisle", 1), ("isle", 1)])
+    func spellingBlindWordsComeFromTheDictionary(word: String, expected: Int) {
+        // These carry no spelling signal at all — "naked" and "baked" are identical to a
+        // rule, and "aisle" is identical to "little". Measured over the lexicon, an "-sle"
+        // case in `hasSyllabicL` fixed three words and broke three others, so the residue
+        // is a lookup by design rather than a rule that pays for itself.
         #expect(SyllableCounter.syllableCount(of: word) == expected,
                 "'\(word)' should be \(expected) syllables")
     }

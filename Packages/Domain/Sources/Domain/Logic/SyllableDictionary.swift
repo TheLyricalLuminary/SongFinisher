@@ -138,6 +138,30 @@ enum SyllableDictionary {
         word("whatever", "wSw", tail: "er")
         word("tomorrow", "wSw", tail: "ow")
 
+        // Words the OOV heuristic provably cannot reach, because the spelling carries no
+        // signal either way. `SyllableCounter.hasSyllabicL` handles the "-le"/"-led"
+        // families by rule; these are the residue, and a lookup is the honest fix.
+        //
+        // The "-ed" here is a real syllable even though it follows neither t nor d — the
+        // adjectival "-ed", which is a closed class in English. Deliberately *not* listed:
+        // blessed, learned, cursed, aged. Those carry a live verb reading at one syllable
+        // ("you blessed my name") alongside the adjective at two, and pinning either would
+        // be wrong half the time; the heuristic's one-syllable answer matches the reading
+        // a songwriter is more often singing.
+        word("naked", "Sw", tail: "ked")
+        word("wicked", "Sw", tail: "ked")
+        word("sacred", "Sw", tail: "red")
+        word("crooked", "Sw", tail: "ked")
+        word("rugged", "Sw", tail: "ged")
+        word("ragged", "Sw", tail: "ged")
+        word("wretched", "Sw", tail: "ched")
+        // "-sle" looks exactly like the syllabic "-le" of "little" and is not. Only these
+        // two matter for lyrics; the rest of the family ("hassle", "tussle") really is
+        // syllabic, so this stays a lookup rather than a rule — measured, adding an "s"
+        // case to `hasSyllabicL` fixed three words and broke three others.
+        word("aisle", "S", tail: "ile")
+        word("isle", "S", tail: "ile")
+
         // Three-syllable words.
         word("poetry", "Sww", tail: "try")
         word("memory", "Sww", tail: "ory")
