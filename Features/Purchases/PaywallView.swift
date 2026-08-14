@@ -143,6 +143,11 @@ private struct ProductButton: View {
                     Text(periodLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let trial = introductoryOfferLabel {
+                        Text(trial)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.brand)
+                    }
                 }
                 Spacer()
                 Text(product.displayPrice)
@@ -157,8 +162,33 @@ private struct ProductButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(product.displayName), \(product.displayPrice), \(periodLabel)")
+        .accessibilityLabel(
+            [product.displayName, product.displayPrice, periodLabel, introductoryOfferLabel]
+                .compactMap { $0 }.joined(separator: ", ")
+        )
         .accessibilityHint("Purchases \(product.displayName)")
+    }
+
+    /// Introductory offer terms, read from the product rather than hardcoded.
+    ///
+    /// App Review 3.1.2 requires the trial length and what happens after it to be visible
+    /// where the purchase is made, not only in App Store Connect. Deriving the text from
+    /// `product.subscription.introductoryOffer` means the row cannot drift out of step
+    /// with the offer actually configured — including saying nothing at all when no offer
+    /// is configured, or when the shopper has already used theirs.
+    private var introductoryOfferLabel: String? {
+        guard let offer = product.subscription?.introductoryOffer, offer.paymentMode == .freeTrial
+        else { return nil }
+        let count = offer.period.value
+        let unit: String
+        switch offer.period.unit {
+        case .day: unit = count == 1 ? "day" : "days"
+        case .week: unit = count == 1 ? "week" : "weeks"
+        case .month: unit = count == 1 ? "month" : "months"
+        case .year: unit = count == 1 ? "year" : "years"
+        @unknown default: return nil
+        }
+        return "\(count)-\(unit) free trial, then \(product.displayPrice)"
     }
 
     private var periodLabel: String {

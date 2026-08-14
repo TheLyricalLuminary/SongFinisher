@@ -172,18 +172,85 @@ def analyze(phones):
     return syllables, stress_bits, open_bits, min(cluster, 255), rhyme_key
 
 
+# Candidate system word lists, in preference order (macOS ships web2 as `words`).
+DICT_PATHS = [
+    "/usr/share/dict/words",
+    "/usr/share/dict/american-english",
+]
+
+# Suffix -> possible base forms. A headword dictionary lists "guide", not "guiding",
+# so inflections must be checked against their stems or the filter eats ordinary verbs.
+INFLECTIONS = [
+    ("'s", [""]), ("s", [""]), ("es", ["", "e"]), ("ed", ["", "e"]),
+    ("ing", ["", "e"]), ("ly", [""]), ("er", ["", "e"]), ("est", ["", "e"]),
+    ("ies", ["y"]), ("ied", ["y"]),
+]
+
+
+def load_headwords():
+    """Lowercase headwords from the system dictionary.
+
+    Moby tags proper nouns and abbreviations as common parts of speech — "russ" and
+    "hindu" as nouns, "mc" and "le" as nouns, "rica" as a noun. They are frequent
+    enough to sit near the top of every Zipf-sorted bucket, so the beam search reaches
+    for them first and the assembler emits "there's the russ hug" and "we support the
+    ly". Frequency cannot separate them from real vocabulary: "le" has a higher Zipf
+    than "ache". Dictionary membership can.
+    """
+    for path in DICT_PATHS:
+        try:
+            handle = open(path, encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        with handle as f:
+            words = {w.strip().lower() for w in f if w.strip() and not w.strip()[0].isupper()}
+        print(f"headwords: {len(words):,} lowercase entries from {path}")
+        return words
+    raise SystemExit(
+        "No system word list found. Looked in:\n  " + "\n  ".join(DICT_PATHS)
+        + "\nThe POS filter needs one; install `wamerican` on Debian, or build on macOS."
+    )
+
+
+def has_headword_stem(word, headwords):
+    """True if `word` is a dictionary headword or a regular inflection of one."""
+    if "'" in word:
+        return True  # contractions ("don't", "i'm") are core lyric vocabulary
+    if word in headwords:
+        return True
+    for suffix, bases in INFLECTIONS:
+        if not word.endswith(suffix) or len(word) <= len(suffix) + 1:
+            continue
+        stem = word[: -len(suffix)]
+        for base in bases:
+            if stem + base in headwords:
+                return True
+        # "stopped" -> "stop", "running" -> "run"
+        if len(stem) > 2 and stem[-1] == stem[-2] and stem[:-1] in headwords:
+            return True
+    return False
+
+
 def main():
     cmu = parse_cmudict(DATA / "cmudict-0.7b")
     moby = parse_moby_pos(DATA / "mobypos.txt")
     vader = parse_vader(DATA / "vader_lexicon.txt")
+    headwords = load_headwords()
     print(f"sources: cmudict={len(cmu)} moby={len(moby)} vader={len(vader)}")
 
     rows = []
+    untagged = 0
     for word, phones in cmu.items():
         zipf = zipf_frequency(word, "en")
         if zipf < MIN_ZIPF:
             continue
         pos = moby.get(word, 0)
+        # Words the dictionary doesn't know keep their pronunciation (they still serve
+        # rhyme and syllable lookups) but lose their part of speech, which is what makes
+        # a word eligible for a content slot in an assembled line.
+        if pos and not has_headword_stem(word, headwords):
+            pos = 0
+            untagged += 1
         if pos == 0 and zipf < NO_POS_MIN_ZIPF:
             continue
         syllables, stress, open_bits, cluster, rhyme = analyze(phones)
@@ -194,7 +261,7 @@ def main():
         rows.append((word, syllables, stress, open_bits, pos, zipf_q, val_q, cluster, rhyme))
 
     rows.sort(key=lambda r: r[0])
-    print(f"admitted: {len(rows)} words")
+    print(f"admitted: {len(rows)} words ({untagged} stripped of POS as non-dictionary)")
 
     strings = b"".join(r[0].encode() for r in rows)
     offsets = []
@@ -219,9 +286,10 @@ def main():
     strings_off = 32 + len(body)
     header = struct.pack("<4sIIII12x", b"SFLX", 1, n, strings_off, len(strings))
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_bytes(header + bytes(body) + strings)
-    print(f"wrote {OUT} ({OUT.stat().st_size:,} bytes)")
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(header + bytes(body) + strings)
+    print(f"wrote {out} ({out.stat().st_size:,} bytes)")
 
     # Acceptance self-checks (Task 1).
     idx = {r[0]: r for r in rows}
@@ -239,6 +307,14 @@ def main():
     # Rhyme: light/night share a key; light/love must not.
     assert idx["light"][8] == idx["night"][8]
     assert idx["light"][8] != idx["love"][8]
+
+    # POS filter: proper nouns and abbreviations must not be eligible for content slots
+    # (these are the words that produced "there's the russ hug" and "his reduced mc"),
+    # while ordinary inflected vocabulary must keep its tags.
+    for w in ["russ", "rica", "liu", "mc", "le", "bahrain", "hindu"]:
+        assert idx.get(w, (w, 0, 0, 0, 0))[4] == 0, f"{w} still POS-tagged"
+    for w in ["guiding", "fulfilling", "lashed", "remedies", "stripped", "hollow", "ache"]:
+        assert w in idx and idx[w][4] != 0, f"{w} lost its POS tags"
     print("self-checks passed")
 
 

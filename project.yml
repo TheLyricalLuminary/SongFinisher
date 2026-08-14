@@ -43,7 +43,16 @@ targets:
           that fit it. Audio is analyzed locally and never stored.
         UILaunchScreen:
           UIColorName: LaunchBackground
+        # A phone is held; an iPad is propped on a stand next to the instrument, and a
+        # lyric sheet wants the wider measure. Landscape is allowed on iPad only — a
+        # phone rotating mid-take would reflow the sheet under the writer's eyes for no
+        # gain.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # A locked phone must not kill a take mid-hum: capture continues in the
         # background and the Live Activity narrates it from the lock screen.
         UIBackgroundModes: [audio]
@@ -51,7 +60,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.songfinisher.app
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -74,7 +83,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.songfinisher.app.widgets
-        TARGETED_DEVICE_FAMILY: "1"
+        # Must match the host app's family or the extension won't install on iPad.
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: false
         DEVELOPMENT_TEAM: 473RT92HDB
         CODE_SIGN_STYLE: Automatic

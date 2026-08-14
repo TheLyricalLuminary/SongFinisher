@@ -133,10 +133,6 @@ struct SuggestionCardView: View {
                 Label("ON-DEVICE AI", systemImage: "sparkles")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.accentColor)
-            case .claude:
-                Label("CLAUDE", systemImage: "sparkles")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
             }
             if candidate.repaired {
                 Text("repaired")
@@ -149,7 +145,6 @@ struct SuggestionCardView: View {
     private func providerSpokenName(for candidate: LyricCandidate) -> String {
         switch candidate.provider {
         case .appleIntelligence: "written by on-device AI"
-        case .claude: "written by Claude"
         case .offline: "offline draft"
         }
     }

@@ -126,7 +126,7 @@ struct SessionView: View {
                 // subject of this screen, and the suggestion is what's being offered
                 // for the next line of it.
                 if !viewModel.sessionMemory.acceptedLines.isEmpty {
-                    SongSheetView(lines: viewModel.sessionMemory.acceptedLines)
+                    SessionSongSheetView(lines: viewModel.sessionMemory.acceptedLines)
                 }
 
                 if showsFinalStressPattern {
@@ -168,6 +168,14 @@ struct SessionView: View {
             withAnimation(.easeOut(duration: 0.25)) {
                 proxy.scrollTo(newest.id, anchor: .center)
             }
+        }
+        // In flow mode the writer's hands are on the instrument and their eyes are
+        // anywhere but the screen, so a line being kept has to be *felt* — otherwise the
+        // one thing the app is doing for them is the one thing they can't perceive.
+        // Undo gets a lighter, distinct tap so taking a line back never feels like
+        // keeping one.
+        .sensoryFeedback(trigger: viewModel.sessionMemory.acceptedLines.count) { old, new in
+            new > old ? .success : .impact(weight: .light)
         }
         // Popping back to the library must release the mic/engine — a session screen is no
         // longer the permanent root, so leaving it has to tear capture down.
@@ -564,8 +572,6 @@ private struct SyllableMeterView: View {
     }
 }
 
-/// Last 3 accepted lines. Tapping through to the full song sheet is a later phase
-/// (docs/ARCHITECTURE.md §15 build plan item 6) — this is a passive recap for now.
 /// The song as it is being written: every kept line, in order, growing downward.
 ///
 /// This replaces a three-line footnote strip that sat below the suggestion and the word
@@ -574,7 +580,10 @@ private struct SyllableMeterView: View {
 /// sequence of disposable cards rather than a song accumulating. The sheet is the point
 /// of the app; it reads like a lyric page, and the newest line is emphasised because
 /// that is the one the writer just sang.
-private struct SongSheetView: View {
+///
+/// Distinct from `SongSheetView` in Features/SongSheet, which is the full-screen sheet
+/// for a saved song; this one is the live, in-session view.
+private struct SessionSongSheetView: View {
     let lines: [LyricLine]
 
     var body: some View {

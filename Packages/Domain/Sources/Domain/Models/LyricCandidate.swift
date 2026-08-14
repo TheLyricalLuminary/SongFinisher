@@ -1,11 +1,13 @@
 import Foundation
 
+/// Every generator the app can run. Both are on-device by construction: there is no
+/// remote case, and no networking anywhere in the app or its packages, which is what
+/// lets `site/privacy.html` state that audio never leaves the device as a fact about
+/// the architecture rather than a promise about conduct.
 public enum ProviderKind: String, Sendable, Equatable, Codable {
     /// Apple's on-device Foundation Models framework — the premium path on
     /// Apple Intelligence hardware. Nothing leaves the device.
     case appleIntelligence
-    /// Remote Anthropic API — designed as an optional future provider; not shipped.
-    case claude
     /// The deterministic lexicon assembler — the universal fallback.
     case offline
 }

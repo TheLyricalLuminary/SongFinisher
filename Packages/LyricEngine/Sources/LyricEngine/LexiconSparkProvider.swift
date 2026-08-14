@@ -45,7 +45,7 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
         let target = PhraseAssembler.targetValence(for: spec)
         let emotion = spec.requestedEmotionOverride ?? spec.topEmotions.first?.emotion ?? .reflection
         let triggerWords = TriggerWordBank.words(for: emotion)
-        var rng = SeededRandom(seed: Self.seed(for: spec, memory: memory))
+        var rng = SeededRandom(seed: Self.seed(for: spec, memory: memory, emotion: emotion))
 
         // Words already used this session are stale as fresh sparks.
         var used = Set(memory.acceptedLines.flatMap { line in
@@ -125,11 +125,19 @@ public struct LexiconSparkProvider: SparkProviding, Sendable {
         return Array(scored.prefix(Self.rhymeCount).map(\.text))
     }
 
-    /// Deterministic per (phrase, session progress) so a given phrase yields a stable
-    /// spark set, but a later phrase in the same session varies.
-    private static func seed(for spec: PhraseSpec, memory: SessionMemory) -> UInt64 {
+    /// Deterministic per (phrase, session progress, emotion) so a given phrase yields a
+    /// stable spark set, but a later phrase in the same session varies.
+    ///
+    /// The emotion belongs in the seed because the book's five emotional states cover the
+    /// app's eight emotions: melancholy, longing and nostalgia all draw on
+    /// `heartbreakHold`, and joy and release both draw on `joyfulRelease`. Seeding on the
+    /// phrase alone made those pairs shuffle identically, so "Different Emotion" — a
+    /// button the session screen offers — visibly did nothing for five of the eight.
+    /// Seeding on the emotion too draws a different sample from the same curated pool,
+    /// which keeps faith with the book's mapping while making the control honest.
+    private static func seed(for spec: PhraseSpec, memory: SessionMemory, emotion: Emotion) -> UInt64 {
         var s = Seeding.fnv(spec.phraseID.uuidString)
-        s ^= Seeding.fnv("sparks:\(memory.acceptedLines.count):\(memory.rejected.count)")
+        s ^= Seeding.fnv("sparks:\(memory.acceptedLines.count):\(memory.rejected.count):\(emotion.rawValue)")
         return s
     }
 }

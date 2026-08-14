@@ -114,6 +114,12 @@ final class SessionViewModel {
     func start() {
         guard pipelineTask == nil else { return }
         resetTelemetry()
+        // Page the model in while the singer is still finding the first phrase, so the
+        // model-load cost doesn't land on the first suggestion of the session. Detached
+        // from the pipeline task: warming must not delay capture, and cancelling the
+        // pipeline must not abandon a load already in flight.
+        let lyrics = services.lyrics
+        Task.detached(priority: .utility) { await lyrics.prewarm() }
         pipelineTask = Task { [weak self] in await self?.run() }
     }
 
