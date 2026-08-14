@@ -93,8 +93,6 @@ public struct FoundationModelsLyricProvider: LyricProviding, Sendable {
     }
 }
 
-/// The structured output contract. Guided generation constrains decoding to this
-/// shape, so there is no JSON parsing and no malformed-response path.
 /// Holds one prewarmed session for the life of the process.
 ///
 /// Deliberately *not* the session requests run on. Reusing a single session across
@@ -117,6 +115,8 @@ actor ModelWarmer {
     }
 }
 
+/// The structured output contract. Guided generation constrains decoding to this
+/// shape, so there is no JSON parsing and no malformed-response path.
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
 struct GeneratedLyricBatch {

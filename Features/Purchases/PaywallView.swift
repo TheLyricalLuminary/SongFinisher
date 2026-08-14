@@ -149,6 +149,12 @@ private struct ProductButton: View {
     let isHighlighted: Bool
     let action: () -> Void
 
+    /// `introductoryOffer` reflects what's *configured*, not what this customer can
+    /// *get* — a lapsed subscriber has already spent their trial. Eligibility is a
+    /// separate async check, and the default is false so the row never advertises a
+    /// trial it can't deliver; the label appears only once eligibility is confirmed.
+    @State private var eligibleForIntroOffer = false
+
     var body: some View {
         Button(action: action) {
             HStack {
@@ -192,6 +198,9 @@ private struct ProductButton: View {
                 .compactMap { $0 }.joined(separator: ", ")
         )
         .accessibilityHint("Purchases \(product.displayName)")
+        .task(id: product.id) {
+            eligibleForIntroOffer = await product.subscription?.isEligibleForIntroOffer ?? false
+        }
     }
 
     /// Introductory offer terms, read from the product rather than hardcoded.
@@ -199,10 +208,11 @@ private struct ProductButton: View {
     /// App Review 3.1.2 requires the trial length and what happens after it to be visible
     /// where the purchase is made, not only in App Store Connect. Deriving the text from
     /// `product.subscription.introductoryOffer` means the row cannot drift out of step
-    /// with the offer actually configured — including saying nothing at all when no offer
-    /// is configured, or when the shopper has already used theirs.
+    /// with the offer actually configured, and the eligibility gate means it says
+    /// nothing at all when this shopper has already used theirs.
     private var introductoryOfferLabel: String? {
-        guard let offer = product.subscription?.introductoryOffer, offer.paymentMode == .freeTrial
+        guard eligibleForIntroOffer,
+              let offer = product.subscription?.introductoryOffer, offer.paymentMode == .freeTrial
         else { return nil }
         let count = offer.period.value
         let unit: String
