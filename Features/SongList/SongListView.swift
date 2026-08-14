@@ -71,7 +71,7 @@ struct SongListView: View {
         }
         .sheet(isPresented: $showsPaywall) {
             if let proStore {
-                PaywallView(store: proStore)
+                PaywallView(store: proStore, premiumLyricsAvailable: services.premiumLyricsAvailable)
             }
         }
         .sheet(isPresented: $showsDiagnostics) {

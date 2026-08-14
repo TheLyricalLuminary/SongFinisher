@@ -73,6 +73,10 @@ final class SessionViewModel {
         didSet { UserDefaults.standard.set(isFlowMode, forKey: Self.flowModeKey) }
     }
 
+    /// Mirrors `AppServices.premiumLyricsAvailable` for the paywall sheet — the view
+    /// layer never reaches into `services` directly.
+    var premiumLyricsAvailable: Bool { services.premiumLyricsAvailable }
+
     private static let flowModeKey = "session.flowMode"
 
     static let energyHistoryCapacity = 150
@@ -268,11 +272,15 @@ final class SessionViewModel {
         // Free tier: each generation event (initial, regenerate, more-like-this, syllable
         // nudge) spends one premium credit. Out of credits → the offline engine, whose
         // cards badge themselves OFFLINE DRAFT, so the downgrade is always visible.
-        let usePremium = gating?.allowPremiumGeneration() ?? true
+        // On hardware with no AI tier, `lyrics` IS the offline assembler: a credit spent
+        // there meters nothing, and the "free AI lines used" upsell would promise lines
+        // this device can't produce — so the gate is skipped entirely.
+        let usePremium = !services.premiumLyricsAvailable || (gating?.allowPremiumGeneration() ?? true)
         if !usePremium {
             didHitFreeLimit = true
             // Known before the request even runs, so the layout settles now rather than
-            // reordering under the writer's eyes when the draft lands.
+            // reordering under the writer's eyes when the draft lands. Only reached when
+            // premium exists but is spent, so the offline engine really is what runs.
             lastProviderKind = .offline
         }
         let provider = usePremium ? services.lyrics : services.offlineLyrics

@@ -182,7 +182,7 @@ struct SessionView: View {
         .onDisappear { viewModel.stop() }
         .sheet(isPresented: $showsPaywall) {
             if let proStore {
-                PaywallView(store: proStore)
+                PaywallView(store: proStore, premiumLyricsAvailable: viewModel.premiumLyricsAvailable)
             }
         }
         }
