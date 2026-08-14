@@ -237,11 +237,13 @@ protocol ProsodyDeriving: Sendable {
 
 protocol LyricProviding: Sendable {                     // THE provider-agnostic seam
     var kind: ProviderKind { get }
+    func prewarm() async                                // default no-op; see §9
     func candidates(for spec: PhraseSpec, memory: SessionMemory)
         async throws(LyricProviderError) -> [LyricCandidate]
 }
-enum LyricProviderError: Error { case network(String), rateLimited(retryAfterSeconds: Int?),
-                                      invalidResponse(String), unauthorized, cancelled }
+// Two cases, because both tiers are local. `network`, `rateLimited` and `unauthorized`
+// existed for the cloud provider that was never built, and went with it.
+enum LyricProviderError: Error { case invalidResponse(String), cancelled }
 
 protocol CandidateRanking: Sendable {
     func rank(_ c: [LyricCandidate], spec: PhraseSpec, memory: SessionMemory) -> [RankedCandidate]
@@ -272,7 +274,7 @@ SongFinisherApp (@main)
 └── RootView(vm: RootViewModel)                       // permission gate → NavigationStack
     ├── MicPermissionView                             // explainer → request → Settings deep-link if denied
     └── NavigationStack
-        └── SongListView ── SongListViewModel         // resume / new session / import memo / settings
+        └── SongListView ── SongListViewModel         // resume a session, start a new one, delete
             ├── SessionView ── SessionViewModel       ★ the main "Listening…" screen
             │   ├── ListeningHeader                   // pulse / paused / error banner
             │   ├── WaveformView                      // TimelineView + Canvas, 30 fps
@@ -283,9 +285,13 @@ SongFinisherApp (@main)
             │   │   ├── [Use] [More Like This] [Regenerate] [Different Emotion ▾]
             │   │   └── "+1 / −1 syllable" chips      // escape hatch for budget errors
             │   └── AcceptedLinesStrip                // last 3 accepted → SongSheet
-            ├── SongSheetView ── SongSheetViewModel   // full sheet, sections, hook flag, export
-            └── SongListView ── SongListViewModel     // library, resume a session, delete
+            └── SongSheetView ── SongSheetViewModel   // full sheet, sections, hook flag, export
 ```
+
+`SongListView` is the stack's root, above — it is not also a leaf under itself. There is no
+settings screen and no memo importer; both appear in older revisions of this document and
+neither was built. The app has nothing to configure (no account, no API key, no model
+choice), and Voice Memo Resurrection is the post-MVP item in §13.
 
 All ViewModels are `@MainActor @Observable`, init-injected with protocols, never importing
 service packages. `SessionViewModel` state machine:
@@ -422,8 +428,10 @@ decoding to `GeneratedLyricBatch`, so there is no JSON parsing and no malformed-
 path. Sessions are per-request and stateless — all cross-phrase continuity travels in the
 prompt via `SessionMemory`.
 
-**Response handling:** `stop_reason` first (`refusal` → fallback; `max_tokens` → salvage
-complete candidates from partial JSON), decode, clamp scores, then **recount every candidate's
+**Response handling:** guided generation hands back a decoded `GeneratedLyricBatch`, so
+there is no wire format to inspect — no `stop_reason`, no partial-JSON salvage, no refusal
+envelope. (Earlier revisions of this section described all three; they belonged to the cloud
+tier that was never built.) Clamp the self-reported scores, then **recount every candidate's
 syllables on-device**: exact within tolerance → keep; ±1 → auto-repair (contract "I am"→"I'm",
 drop/add an article, flagged `repaired`); ±2+ → drop. Fewer than 3 survivors → one silent
 corrective retry quoting the failures back ("these had 8 syllables, not 7: …"), then blend
@@ -446,13 +454,20 @@ VADER valence, built by `tools/build_lexicon.py`). Templates are POS frames; the
 words down left-to-right scoring stress-on-strong-beat, open-vowel-on-long-note and
 consonant-cluster-on-fast-note, so **outputs satisfy the stress map by construction**.
 Seeded RNG (`phraseID ^ attempt`) so Regenerate varies deterministically and tests are
-exact-match. Never errors.
+exact-match.
+
+It has exactly one error path, and it is the one that cannot be papered over: if every
+widening still fills no line, it throws `invalidResponse` rather than hand back an empty
+pool that the session screen would render as an unending wait. It never fails for a reason
+outside itself — no service, no quota, no connection — which is the property that actually
+matters, but "never errors" was too strong.
 
 A frame only applies when `minSyllables <= target <= maxSyllables`, so the bank must cover
-the whole range a phrase can ask for. When it doesn't, a last-resort sweep widens the
-target until something fills — which never errors but *silently answers a different
-question*, handing back a three-syllable line for a one-syllable phrase. Coverage at the
-short end matters precisely because the failure is quiet.
+the whole range a phrase can ask for. When it doesn't, a last-resort sweep widens the target
+until something fills — which does not error, but *silently answers a different question*,
+handing back a three-syllable line for a one-syllable phrase. That was the live behaviour for
+1–2 syllable phrases until the bank gained short frames; coverage at the short end matters
+precisely because the failure is quiet.
 
 **Moby's POS tags are dirty and most of the guard code exists because of it**: it tags "a"
 as a noun, "your" as an adjective, "l" as a noun, and those are the highest-frequency words
@@ -496,8 +511,9 @@ anywhere.
 
 ## 11. Testing strategy
 
-Swift Testing; every suite runs on CI with **no mic, no network**. Targets: Domain ≥ 95%
-coverage, services ≥ 80%.
+Swift Testing, **no mic, no network**. The Domain and LyricEngine suites are pure Swift and
+run on a Linux container in CI; MelodyKit and the app target need macOS + Xcode and are run
+locally (`docs/BUILDING.md`). Targets: Domain ≥ 95% coverage, services ≥ 80%.
 
 1. **Domain (pure — the goldmine):** table-driven tests for StressMapDeriver (note-event
    literals → expected `SwSwwSw`), SyllableCounter (~300-word golden table incl. traps: fire,
@@ -511,14 +527,16 @@ coverage, services ≥ 80%.
    bit-identical determinism (same file twice), DEBUG malloc-hook zero-allocation assertion,
    faster-than-realtime CI throughput test. **Release gate:** syllable exact-match ≥ 80%,
    within-±1 ≥ 97% on the melisma-heavy corpus.
-3. **AI layer, zero network:** `StubHTTPClient` fixtures (ok / malformed / refusal /
-   max_tokens / 429+retry-after / 529-then-200); **golden-prompt snapshot tests** per intent
-   incl. the cache invariant (system prompt byte-identical across differing specs) and
-   request-shape contract tests (no `temperature` key, thinking disabled,
-   `additionalProperties: false` at every level); memory caps enforced in rendered prompts;
-   fallback/upgrade policy tests with an injected `Clock`; offline provider exact-match via
-   seeded RNG, and the template CI harness (every template must satisfy its own stress
-   signature).
+3. **AI layer, zero network:** zero network is enforced, not asserted —
+   `tools/check_no_network.sh` fails on a networking import, a networking API, or a package
+   dependency fetched from a URL, and CI runs it on every pull request. Foundation Models
+   availability is hardware-dependent, so the tier is exercised through a fake at the
+   `LyricProviding` seam (which tier leads the layout, that starting a session warms the
+   model) and the deterministic offline provider is tested exhaustively: exact-match via
+   seeded RNG, memory caps in rendered prompts, and the template harness (every template
+   must satisfy its own stress signature). No HTTP fixtures, no retry/backoff policy, no
+   golden request shapes — earlier revisions listed all of those for the cloud tier that was
+   never built.
 4. **ViewModels with `AppServices.fakes()`:** state-machine walks, supersession/cancellation
    via spies, accept-persists/regenerate-records-rejection, offline badge without error state,
    weak-reference leak test.
@@ -562,10 +580,11 @@ time" hint.
    confidence-widened tolerance ("8–10 syllables" instead of false precision), the live
    syllable meter (users see and re-hum miscounts), ±1 auto-repair, +1/−1 chips, and the
    annotated-corpus release-gate metric.
-2. **Cloud latency/cost/availability kills flow.** Mitigated by the instant offline
-   placeholder + upgrade-in-place (never a spinner, never blank), prompt caching
-   (~$0.008/call), 6 s bound, latest-phrase-wins cancellation, session budget guard;
-   speculative pre-warm on tentative-end is the pre-seamed post-MVP lever.
+2. **Generation latency kills flow.** No longer a cloud risk — there is no request, no
+   quota and no outage — but Foundation Models lazy-loads, and that load is seconds long the
+   first time. Mitigated by `prewarm()` fired when listening starts (so the load overlaps the
+   writer settling in front of the mic), the deterministic offline tier as an instant floor,
+   and latest-phrase-wins cancellation so a slow phrase never blocks the next one.
 3. **SwiftData/strict-concurrency landmines late in the project.** Mitigated structurally:
    SwiftData quarantined behind one seam (worst-case swap is days, not a rewrite),
    `VersionedSchema` from day one, memory-as-blob removes the churniest shape from migrations,

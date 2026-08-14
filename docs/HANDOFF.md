@@ -209,29 +209,50 @@ about. Two real defects were found this way and both were shipped as fixes:
 
 | Heuristic | Was | Now |
 |---|---|---|
-| `SyllableCounter` syllable count | 83.1% exact | **88.1%** — "-ed" silent unless after t/d, consonant + "le" syllabic |
+| `SyllableCounter` syllable count | 82.5% exact | **87.8%** — silent "-ed" unless after t/d, plus a shared syllabic-l test |
 | `SingabilityScorer` open vowel | 79.8% | **86.0%** — AY/EY/AW/OW/ER spellings, magic-e, final -y |
+
+(Percentages are over the 34,563 alphabetic entries in `lexicon.bin`. An earlier revision of
+this table quoted 83.1% → 88.1% against a smaller high-frequency subset; same change, same
+gain, different denominator.)
 
 The second mattered because the old rule called **sky, high, time, eye, my, try, fly,
 light, night** and **fire** closed — the words a singer actually holds — so the ranker was
 demoting the assembler's best picks for long notes.
 
+The syllable rule went through two rounds. The first handled the syllabic l only on the
+"-le" side ("little", "gentle"), which then read every "-le" verb in the past tense —
+"handled", "settled", "troubled", "assembled" — a syllable short. `hasSyllabicL` now answers
+the question once for both endings and excludes a doubled l, which is what keeps "called"
+and "filled" at one syllable while "belle" and "Nashville" stay right.
+
 Before changing either heuristic, port it to Python, run it over the lexicon, and keep the
-change only if the number improves. A first attempt at the "-le" rule fired on any
-consonant plus "e", turned "shine" and "grace" into two syllables and made accuracy
-*worse* than the original; only the measurement caught it.
+change only if the number improves. Two attempts failed that test and were dropped:
+
+- A first "-le" rule fired on any consonant plus "e", turned "shine" and "grace" into two
+  syllables, and scored *worse* than the original.
+- An "-sle" case, added to fix "aisle" and "isle", fixed exactly three words and broke
+  exactly three others ("hassle", "tussle", "lisle"). Net zero, so it is not in the
+  heuristic; those two words live in `SyllableDictionary` instead, along with the adjectival
+  "-ed" class ("naked", "wicked", "sacred", "crooked") that carries no spelling signal at
+  all — "naked" and "baked" are identical to any rule.
 
 ### Verifying without a Swift toolchain
 
 Agents often run in Linux containers where Swift is unreachable and CI is broken (§7).
-Two Python tools read the *real* lexicon and reproduce the engine:
+These tools need no toolchain and read the *real* lexicon:
 
 - `tools/offline_engine_replica.py` — the assembler pipeline
 - `tools/verify_sparks.py` — `imageWords`, with the word sets **parsed out of the Swift
   sources** so it always checks what ships
+- `tools/verify_syllables.py` — `SyllableCounter`'s heuristic against CMUdict counts.
+  `--compare` prints every rule variant side by side; `--words shine grace handled` prints
+  per-word counts. This is the harness the table above came from.
+- `tools/check_no_network.sh` — the no-networking guarantee, enforced against the source
 
 These are not decoration. `verify_sparks.py` caught the frozen-spark-panel defect that
-review by eye had missed.
+review by eye had missed, and `verify_syllables.py` is the only reason two plausible-looking
+rule changes did not ship as regressions.
 
 ### The latency test
 
@@ -317,8 +338,10 @@ Open work is PR #7.
 - **Apple Developer enrollment** ($99) not confirmed complete.
 - GitHub Pages needs pointing at the `gh-pages` branch (root) — `privacy.html` and
   `support.html` are written and must be reachable at a public URL for App Review.
-- `site/support.html` still describes flow mode as "playing your next phrase keeps the
-  line". That is now wrong — every line is kept as it arrives. Update before launch.
+- `support.html` still describes flow mode as "playing your next phrase keeps the line".
+  That is now wrong — every line is kept as it arrives. Note that the marketing site is
+  **not in this repository**: it lives on the `gh-pages` branch, so it does not move with
+  a change to `main` and has to be updated separately, before launch.
 
 ---
 

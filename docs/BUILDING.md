@@ -85,9 +85,17 @@ Then in Xcode:
 
 Every GitHub Actions run since the repo was created has failed at startup with zero
 jobs — Actions is disabled or unbilled at the account level, not broken in the config.
-Once you fix that, the Linux workflow already in `.github/workflows/ci.yml` will run
-the `Domain` + `LyricEngine` suites automatically on every push and give you a green
-check on the logic layer.
+Once you fix that, the workflow already in `.github/workflows/ci.yml` gives you a green
+check on the logic layer: the `Domain` + `LyricEngine` suites on a Linux container, plus
+`tools/check_no_network.sh` enforcing the no-networking guarantee. It runs on pushes to
+`main` and on every pull request — deliberately not on every push to every branch, which
+would double up each PR commit into two identical runs.
+
+`check_no_network.sh` needs no toolchain, so run it locally any time:
+
+```bash
+./tools/check_no_network.sh
+```
 
 1. **Repo → Settings → Actions → General** → set *Actions permissions* to
    "Allow all actions and reusable workflows".

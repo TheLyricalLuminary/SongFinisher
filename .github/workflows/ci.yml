@@ -11,6 +11,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The privacy policy claims the app has no networking code in it. That is a claim about
+  # the source, so it is checked against the source. Needs no Swift toolchain, so it is
+  # its own job and reports independently of the package tests.
+  no-network:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No networking imports, APIs, or remote dependencies
+        run: ./tools/check_no_network.sh
+
   # Pure-Swift packages build and test on Linux. Linux runners bill at 1x and are
   # available on private repos, so this actually runs (the previous macOS-only
   # workflow failed to start on every push). Covers the lyric logic that ships to

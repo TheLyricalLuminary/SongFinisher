@@ -44,11 +44,16 @@ public struct OfflineLyricProvider: LyricProviding, Sendable {
             if pool.count >= 60 { break }
         }
 
-        // The template bank's shortest frame needs 3 syllables, so a confident (zero- or
-        // narrow-tolerance) budget of 1–2 starves here even though nothing upstream is
-        // wrong. Widen past the phrase's own tolerance as an absolute last resort — same
-        // honest-degradation idea as the tolerance widening itself — rather than breaking
-        // the documented "always returns at least one candidate" contract.
+        // Last resort: widen past the phrase's own tolerance rather than break the
+        // documented "always returns at least one candidate" contract. Same
+        // honest-degradation idea as the tolerance widening itself, one step further.
+        //
+        // This used to run routinely, because the shortest template frame needed three
+        // syllables and a confident 1–2-syllable budget — one strum on Sparse density, a
+        // two-note hum — starved with nothing upstream wrong. It then answered a different
+        // question than the one asked, silently, handing back a three-syllable line. The
+        // bank now covers 1–2 directly (`Templates.swift`), so reaching this is a real
+        // coverage gap rather than a known hole being papered over.
         if pool.isEmpty {
             for n in 1...12 where !tried.contains(n) {
                 pool.append(contentsOf: assembler.assemble(
