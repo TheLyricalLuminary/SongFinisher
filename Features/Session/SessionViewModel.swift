@@ -265,6 +265,10 @@ final class SessionViewModel {
         state = .suggesting
         rankedCandidates = []
         isGenerating = true
+        // The previous attempt's message must not outlive it. Without this a [Regenerate]
+        // after a no-fit phrase shows "No line fits that phrase" over the spinner for the
+        // whole of the next request — an error about a phrase that is no longer on screen.
+        generationError = nil
 
         // Free tier: each generation event (initial, regenerate, more-like-this, syllable
         // nudge) spends one premium credit. Out of credits → the offline engine, whose
@@ -322,14 +326,41 @@ final class SessionViewModel {
 
     // MARK: - Persistence (best-effort; a failed write never disrupts the writing flow)
 
-    /// Fire-and-forget: the store serializes writes on its own actor, and a persistence
-    /// error is non-fatal to a live session (docs/ARCHITECTURE.md §12 — `persistenceFailed`
-    /// degrades silently rather than interrupting).
+    /// The tail of the write chain. Every store write links onto it, so writes reach the
+    /// store in the order the songwriter made them.
+    private var persistenceTail: Task<Void, Never>?
+
+    /// Enqueues a store write behind every write already issued.
+    ///
+    /// These are deliberately fire-and-forget — a persistence error is non-fatal to a live
+    /// session (docs/ARCHITECTURE.md §12 — `persistenceFailed` degrades silently rather
+    /// than interrupting) — but "don't wait for it" is not the same as "don't order it".
+    /// Independent `Task {}` blocks reach the store actor in whatever order the scheduler
+    /// picks: `SongStore` serializes each call, not the sequence of them. In flow mode the
+    /// writer's phrases arrive fast enough for that to matter twice over. A regenerate's
+    /// `replaceLine` could overtake the `append` that created the line, find nothing to
+    /// replace, and return silently — leaving the rewritten line in `SessionMemory` and the
+    /// superseded one on disk. And each write carries a `SessionMemory` snapshot taken when
+    /// it was issued, so an older task landing last would overwrite newer memory with
+    /// staler memory.
+    ///
+    /// Awaiting the previous task fixes both: the chain is FIFO by construction, and the
+    /// last snapshot written is the last one taken.
+    private func enqueuePersistence(
+        _ work: @escaping @Sendable (any SongStoring) async -> Void
+    ) {
+        let store = services.store
+        let previous = persistenceTail
+        persistenceTail = Task {
+            await previous?.value
+            await work(store)
+        }
+    }
+
     private func persistAcceptedLine(_ line: LyricLine) {
         guard let songID else { return }
-        let store = services.store
         let memorySnapshot = sessionMemory
-        Task {
+        enqueuePersistence { store in
             try? await store.append(line: line, to: songID)
             try? await store.updateMemory(memorySnapshot, songID: songID)
         }
@@ -341,9 +372,8 @@ final class SessionViewModel {
     /// — `SessionMemory.record` keeps the position, and this has to match it.
     private func persistReplacement(of replaced: LyricLine, with line: LyricLine) {
         guard let songID else { return }
-        let store = services.store
         let memorySnapshot = sessionMemory
-        Task {
+        enqueuePersistence { store in
             try? await store.replaceLine(id: replaced.id, with: line, in: songID)
             try? await store.updateMemory(memorySnapshot, songID: songID)
         }
@@ -351,9 +381,10 @@ final class SessionViewModel {
 
     private func syncMemoryToStore() {
         guard let songID else { return }
-        let store = services.store
         let memorySnapshot = sessionMemory
-        Task { try? await store.updateMemory(memorySnapshot, songID: songID) }
+        enqueuePersistence { store in
+            try? await store.updateMemory(memorySnapshot, songID: songID)
+        }
     }
 
     // MARK: - User intents (docs/ARCHITECTURE.md §9)
@@ -407,9 +438,11 @@ final class SessionViewModel {
         guard let removed = sessionMemory.acceptedLines.popLast() else { return }
         sessionMemory.dominantEmotion = sessionMemory.acceptedLines.last?.emotion
         if let songID {
-            let store = services.store
             let memorySnapshot = sessionMemory
-            Task {
+            // Through the chain like every other write: undo is the case that needs the
+            // ordering most, since a delete that overtakes the append it undoes would
+            // leave the taken-back line on disk permanently.
+            enqueuePersistence { store in
                 try? await store.removeLine(id: removed.id, from: songID)
                 try? await store.updateMemory(memorySnapshot, songID: songID)
             }
