@@ -29,6 +29,7 @@ final class SessionViewModel {
     private(set) var currentConfidence: Float = 0
     private(set) var isVoiced = false
     private(set) var currentTempo: TempoEstimate?
+    private(set) var currentChord: ChordEstimate?
     private(set) var liveNoteCountInPhrase = 0
     private(set) var energyHistory: [Float] = []
     /// What the DSP chain currently hears: a melodic line, or strummed chords (the
@@ -44,24 +45,85 @@ final class SessionViewModel {
     /// Evocative words + rhymes for the current phrase — the songwriter's raw material
     /// when the generated line isn't the one. Resolved locally and instantly.
     private(set) var currentSparks: WordSparks?
+    /// Which engine wrote the lines most recently shown. The session screen leads with
+    /// sparks rather than the card on the offline tier, and reading the *last* engine
+    /// rather than the one currently running keeps that layout stable across the gap
+    /// while the next generation is in flight. Seeded from the composed provider so the
+    /// first phrase of a session is already laid out right.
+    private(set) var lastProviderKind: ProviderKind
+    /// True while a request is actually in flight. Without this, "still working" and
+    /// "finished and found nothing" are the same state on screen — an empty candidate
+    /// list — and the suggestion card's spinner runs forever with nothing coming. That
+    /// is not hypothetical: it is what a phrase with no matching template produced.
+    private(set) var isGenerating = false
     private(set) var generationError: String?
     private(set) var sessionMemory = SessionMemory()
+    /// True once a generation in this session was routed to the offline engine because
+    /// the free tier's daily premium budget ran out — drives the upsell banner. Sticky
+    /// for the rest of the session (going Pro mid-session clears it via the next check).
+    private(set) var didHitFreeLimit = false
+
+    /// Lock and move (the method from "The Song Finisher", as an app mode): with flow
+    /// mode on, every line is written onto the song sheet as it arrives. Taking your
+    /// hands off the instrument to tap [Use] is what breaks a flow state, so the app
+    /// records what you played and leaves curation for afterwards — one line per phrase,
+    /// replaced if you regenerate, and [Undo keep] takes back the last one.
+    /// Persisted: a writer who works this way always works this way.
+    var isFlowMode: Bool {
+        didSet { UserDefaults.standard.set(isFlowMode, forKey: Self.flowModeKey) }
+    }
+
+    /// Mirrors `AppServices.premiumLyricsAvailable` for the paywall sheet — the view
+    /// layer never reaches into `services` directly.
+    var premiumLyricsAvailable: Bool { services.premiumLyricsAvailable }
+
+    private static let flowModeKey = "session.flowMode"
 
     static let energyHistoryCapacity = 150
     static let uiUpdateInterval: TimeInterval = 1.0 / 30.0
 
     private let services: AppServices
+    /// The saved song this session writes into. `nil` = ephemeral session (tests /
+    /// previews); when set, accepted lines and memory are persisted best-effort.
+    private let songID: UUID?
+    /// Shown on the Live Activity (lock screen / Dynamic Island) while listening.
+    private let songTitle: String
+    /// `nil` = unmetered (tests, previews, diagnostics): every generation uses the
+    /// premium provider. The live app passes `ProStore`.
+    private let gating: (any GenerationGating)?
+    private let liveActivity = SessionActivityController()
     private var pipelineTask: Task<Void, Never>?
     private var generationTask: Task<Void, Never>?
     private var lastPitchUIUpdate: TimeInterval = -1
 
-    init(services: AppServices) {
+    init(
+        services: AppServices,
+        songID: UUID? = nil,
+        songTitle: String? = nil,
+        initialMemory: SessionMemory = SessionMemory(),
+        gating: (any GenerationGating)? = nil
+    ) {
         self.services = services
+        self.songID = songID
+        self.songTitle = songTitle ?? "New Song"
+        self.sessionMemory = initialMemory
+        self.gating = gating
+        self.isFlowMode = UserDefaults.standard.bool(forKey: Self.flowModeKey)
+        // `AppServices` already picked the best available engine at composition time, so
+        // on hardware without Apple Intelligence the screen can lay itself out correctly
+        // before the first phrase instead of reordering once the first draft lands.
+        self.lastProviderKind = services.lyrics.kind
     }
 
     func start() {
         guard pipelineTask == nil else { return }
         resetTelemetry()
+        // Page the model in while the singer is still finding the first phrase, so the
+        // model-load cost doesn't land on the first suggestion of the session. Detached
+        // from the pipeline task: warming must not delay capture, and cancelling the
+        // pipeline must not abandon a load already in flight.
+        let lyrics = services.lyrics
+        Task.detached(priority: .utility) { await lyrics.prewarm() }
         pipelineTask = Task { [weak self] in await self?.run() }
     }
 
@@ -72,6 +134,7 @@ final class SessionViewModel {
         generationTask = nil
         let capture = services.capture
         Task { await capture.stop() }
+        liveActivity.end()
         state = .idle
     }
 
@@ -85,6 +148,7 @@ final class SessionViewModel {
         currentConfidence = 0
         isVoiced = false
         currentTempo = nil
+        currentChord = nil
         liveNoteCountInPhrase = 0
         energyHistory.removeAll(keepingCapacity: true)
         inputMode = .melodic
@@ -116,17 +180,20 @@ final class SessionViewModel {
             let chunks = try await services.capture.start()
             guard !Task.isCancelled else { return }
             state = .listening
+            liveActivity.start(songTitle: songTitle)
             for await event in services.analyzer.analyze(chunks) {
                 if Task.isCancelled { break }
                 handle(event)
             }
             if !Task.isCancelled {
                 state = .idle
+                liveActivity.end()
                 pipelineTask = nil
             }
         } catch {
             if !Task.isCancelled {
                 state = .failed("\(error)")
+                liveActivity.end()
                 pipelineTask = nil
             }
         }
@@ -149,6 +216,9 @@ final class SessionViewModel {
         case .tempoUpdated(let tempo):
             currentTempo = tempo
 
+        case .chordUpdated(let chord):
+            currentChord = chord
+
         case .phraseInProgress(_, let provisionalNotes):
             liveNoteCountInPhrase = provisionalNotes
 
@@ -167,10 +237,18 @@ final class SessionViewModel {
 
     private func handlePhraseCompleted(_ phrase: Phrase) {
         liveNoteCountInPhrase = 0
+        // Nothing to commit here any more: in flow mode a line is kept the moment it
+        // arrives (see `generate`), not when the next phrase pushes it off screen. That
+        // ordering is what made the song sheet stay empty for anyone who played a phrase
+        // and then stopped to look at it.
         currentPhrase = phrase
         generationTask?.cancel()
         state = .analyzingPhrase
-        let spec = services.prosody.spec(for: phrase, tempo: currentTempo, memoryHints: sessionMemory, density: density)
+        updateLiveActivity(phase: .analyzing)
+        let spec = services.prosody.spec(
+            for: phrase, tempo: currentTempo, memoryHints: sessionMemory,
+            density: density, chord: currentChord
+        )
         // Sparks are a local lexicon lookup, not a generation request — resolve them
         // synchronously so the songwriter always has material even while (or if) the
         // line generator produces something weak.
@@ -189,16 +267,51 @@ final class SessionViewModel {
         currentSpec = spec
         state = .suggesting
         rankedCandidates = []
+        isGenerating = true
+
+        // Free tier: each generation event (initial, regenerate, more-like-this, syllable
+        // nudge) spends one premium credit. Out of credits → the offline engine, whose
+        // cards badge themselves OFFLINE DRAFT, so the downgrade is always visible.
+        // On hardware with no AI tier, `lyrics` IS the offline assembler: a credit spent
+        // there meters nothing, and the "free AI lines used" upsell would promise lines
+        // this device can't produce — so the gate is skipped entirely.
+        let usePremium = !services.premiumLyricsAvailable || (gating?.allowPremiumGeneration() ?? true)
+        if !usePremium {
+            didHitFreeLimit = true
+            // Known before the request even runs, so the layout settles now rather than
+            // reordering under the writer's eyes when the draft lands. Only reached when
+            // premium exists but is spent, so the offline engine really is what runs.
+            lastProviderKind = .offline
+        }
+        let provider = usePremium ? services.lyrics : services.offlineLyrics
 
         do throws(LyricProviderError) {
-            let raw = try await services.lyrics.candidates(for: spec, memory: sessionMemory)
+            let raw = try await provider.candidates(for: spec, memory: sessionMemory)
             guard !Task.isCancelled, currentSpec?.phraseID == spec.phraseID else { return }
+            isGenerating = false
             rankedCandidates = services.ranker.rank(raw, spec: spec, memory: sessionMemory)
-            generationError = nil
+            // The premium provider falls back internally on ineligible hardware, so the
+            // candidate itself is the only honest report of which engine actually ran.
+            lastProviderKind = rankedCandidates.first?.candidate.provider ?? lastProviderKind
+            // An empty pool is not an error the provider throws — it just returns nothing
+            // — so it has to be reported here or it reads as an unending wait.
+            generationError = rankedCandidates.isEmpty
+                ? "No line fits that phrase. Try playing a longer one, or nudge the syllable count."
+                : nil
+            // Keep it the moment it exists. A songwriter mid-take shouldn't have to do
+            // anything for the song to be recorded — the sheet is what they played, and
+            // pruning is a job for afterwards. `commitAccepted` keys on the phrase, so a
+            // regenerate for this same phrase rewrites its line instead of adding one.
+            if isFlowMode, let top = rankedCandidates.first {
+                commitAccepted(top)
+            }
+            updateLiveActivity(phase: .suggesting)
         } catch {
             guard !Task.isCancelled else { return }
+            isGenerating = false
             generationError = "\(error)"
             state = .listening
+            updateLiveActivity(phase: .listening)
         }
     }
 
@@ -211,12 +324,72 @@ final class SessionViewModel {
         for ranked in rankedCandidates {
             sessionMemory.rejected.append(RejectedLine(text: ranked.candidate.text, reason: reason))
         }
+        syncMemoryToStore()
+    }
+
+    // MARK: - Persistence (best-effort; a failed write never disrupts the writing flow)
+
+    /// Fire-and-forget: the store serializes writes on its own actor, and a persistence
+    /// error is non-fatal to a live session (docs/ARCHITECTURE.md §12 — `persistenceFailed`
+    /// degrades silently rather than interrupting).
+    private func persistAcceptedLine(_ line: LyricLine) {
+        guard let songID else { return }
+        let store = services.store
+        let memorySnapshot = sessionMemory
+        Task {
+            try? await store.append(line: line, to: songID)
+            try? await store.updateMemory(memorySnapshot, songID: songID)
+        }
+    }
+
+    /// Swaps a phrase's stored line for its replacement, in place. Remove-then-append
+    /// would work but would move the rewritten line to the end of the song, so the saved
+    /// sheet and its export would disagree with the order the writer watched being built
+    /// — `SessionMemory.record` keeps the position, and this has to match it.
+    private func persistReplacement(of replaced: LyricLine, with line: LyricLine) {
+        guard let songID else { return }
+        let store = services.store
+        let memorySnapshot = sessionMemory
+        Task {
+            try? await store.replaceLine(id: replaced.id, with: line, in: songID)
+            try? await store.updateMemory(memorySnapshot, songID: songID)
+        }
+    }
+
+    private func syncMemoryToStore() {
+        guard let songID else { return }
+        let store = services.store
+        let memorySnapshot = sessionMemory
+        Task { try? await store.updateMemory(memorySnapshot, songID: songID) }
     }
 
     // MARK: - User intents (docs/ARCHITECTURE.md §9)
 
     /// No API call: append the line, fold its emotion into memory, go back to listening.
     func use(_ ranked: RankedCandidate) {
+        guard currentSpec != nil else { return }
+        commitAccepted(ranked)
+        generationTask?.cancel()
+        generationTask = nil
+        currentPhrase = nil
+        currentSpec = nil
+        rankedCandidates = []
+        currentSparks = nil
+        generationError = nil
+        state = .listening
+        updateLiveActivity(phase: .listening)
+    }
+
+    /// Records a line on the song sheet and persists it. Shared by the explicit [Use]
+    /// tap and the automatic keep, so both paths record identically — only the
+    /// surrounding state handling differs.
+    ///
+    /// One line per phrase. [Regenerate], [More Like This], [Different Emotion] and the
+    /// syllable nudges all produce a new line for the *same* phrase, so they replace
+    /// that phrase's entry rather than stacking another copy; an explicit [Use] on a
+    /// line already kept automatically is likewise not a second line. Without this,
+    /// keeping automatically would turn every retry into a duplicate on the sheet.
+    private func commitAccepted(_ ranked: RankedCandidate) {
         guard let spec = currentSpec else { return }
         let emotion = spec.topEmotions.first?.emotion ?? sessionMemory.dominantEmotion ?? .reflection
         let line = LyricLine(
@@ -226,16 +399,45 @@ final class SessionViewModel {
             emotion: emotion,
             acceptedAt: Date()
         )
-        sessionMemory.acceptedLines.append(line)
         sessionMemory.dominantEmotion = emotion
-        generationTask?.cancel()
-        generationTask = nil
-        currentPhrase = nil
-        currentSpec = nil
-        rankedCandidates = []
-        currentSparks = nil
-        generationError = nil
-        state = .listening
+        if let replaced = sessionMemory.record(line) {
+            persistReplacement(of: replaced, with: line)
+        } else {
+            persistAcceptedLine(line)
+        }
+    }
+
+    /// Takes back the most recently kept line without interrupting capture — the safety
+    /// net that keeps flow mode's automatic keeping non-destructive. Bound to a keyboard
+    /// shortcut so it works from a foot pedal mid-take.
+    func undoLastAccepted() {
+        guard let removed = sessionMemory.acceptedLines.popLast() else { return }
+        sessionMemory.dominantEmotion = sessionMemory.acceptedLines.last?.emotion
+        if let songID {
+            let store = services.store
+            let memorySnapshot = sessionMemory
+            Task {
+                try? await store.removeLine(id: removed.id, from: songID)
+                try? await store.updateMemory(memorySnapshot, songID: songID)
+            }
+        }
+        updateLiveActivity(phase: currentActivityPhase)
+    }
+
+    private var currentActivityPhase: SessionActivityPhase {
+        switch state {
+        case .analyzingPhrase: .analyzing
+        case .suggesting: .suggesting
+        default: .listening
+        }
+    }
+
+    private func updateLiveActivity(phase: SessionActivityPhase) {
+        liveActivity.update(
+            phase: phase,
+            acceptedLineCount: sessionMemory.acceptedLines.count,
+            lastAcceptedLine: sessionMemory.acceptedLines.last?.text
+        )
     }
 
     func regenerate() {

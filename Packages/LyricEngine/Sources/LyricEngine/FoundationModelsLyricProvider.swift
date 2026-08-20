@@ -33,6 +33,17 @@ public struct FoundationModelsLyricProvider: LyricProviding, Sendable {
         return false
     }
 
+    /// Pages the model in before the singer's first phrase lands.
+    ///
+    /// The first `respond(to:)` of a process pays several seconds of model load, and
+    /// without this it lands on the first phrase of the session — the one suggestion
+    /// that decides whether the app feels alive. `ModelWarmer` holds the warmed session
+    /// for the life of the process so the cost is paid once; requests still get their
+    /// own fresh session (see `candidates(for:memory:)`).
+    public func prewarm() async {
+        await ModelWarmer.shared.warm()
+    }
+
     public func candidates(for spec: PhraseSpec, memory: SessionMemory) async throws(LyricProviderError) -> [LyricCandidate] {
         do {
             // A fresh session per request: providers are stateless Sendable structs
@@ -79,6 +90,28 @@ public struct FoundationModelsLyricProvider: LyricProviding, Sendable {
             ))
         }
         return out
+    }
+}
+
+/// Holds one prewarmed session for the life of the process.
+///
+/// Deliberately *not* the session requests run on. Reusing a single session across
+/// phrases would accumulate a transcript that grows without bound over a long writing
+/// session, and every cross-phrase fact this app needs (accepted lines, rejects, themes,
+/// hook) is already assembled explicitly into each prompt from `SessionMemory` — so a
+/// shared transcript would both duplicate that state and steadily slow generation down.
+/// What is worth keeping warm is the model itself, which is process-wide.
+@available(iOS 26.0, macOS 26.0, *)
+actor ModelWarmer {
+    static let shared = ModelWarmer()
+
+    private var warmed: LanguageModelSession?
+
+    func warm() {
+        guard warmed == nil, FoundationModelsLyricProvider.isModelAvailable else { return }
+        let session = LanguageModelSession(instructions: FoundationModelsPromptBuilder.instructions())
+        session.prewarm()
+        warmed = session
     }
 }
 

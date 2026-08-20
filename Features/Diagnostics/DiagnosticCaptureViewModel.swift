@@ -36,6 +36,7 @@ final class DiagnosticCaptureViewModel {
     private(set) var isVoiced = false
     private(set) var tempoBPM: Double?
     private(set) var tempoConfidence: Float = 0
+    private(set) var chord: ChordEstimate?
     private(set) var liveNoteCountInPhrase = 0
     private(set) var completedPhraseCount = 0
     private(set) var discardedPhraseCount = 0
@@ -86,6 +87,7 @@ final class DiagnosticCaptureViewModel {
         isVoiced = false
         tempoBPM = nil
         tempoConfidence = 0
+        chord = nil
         liveNoteCountInPhrase = 0
         completedPhraseCount = 0
         discardedPhraseCount = 0
@@ -154,6 +156,9 @@ final class DiagnosticCaptureViewModel {
         case .tempoUpdated(let tempo):
             tempoBPM = tempo.bpm
             tempoConfidence = tempo.confidence
+
+        case .chordUpdated(let estimate):
+            chord = estimate
 
         case .phraseInProgress(_, let provisionalNotes):
             if provisionalNotes > liveNoteCountInPhrase { onsetTick += 1 }

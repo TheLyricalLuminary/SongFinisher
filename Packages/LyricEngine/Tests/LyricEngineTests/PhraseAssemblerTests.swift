@@ -14,6 +14,22 @@ import Domain
         #expect(distinct.count >= 5, "only \(distinct.count) distinct lines for \(syllables) syllables")
     }
 
+    @Test("short phrases still get lines", arguments: [1, 2])
+    func shortPhrasesProduceCandidates(syllables: Int) {
+        // Every frame used to need three slots, so a one- or two-note phrase — one strum
+        // on Sparse density, or a two-note hum — matched no template, the pool came back
+        // empty, and the session screen sat on "finding a line that fits…" with nothing
+        // to find and no way out. The existing coverage all starts at 3, which is exactly
+        // why that shipped.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+        let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: 11, poolTarget: 60)
+        #expect(!pool.isEmpty, "no candidates for a \(syllables)-syllable phrase")
+        for line in pool {
+            #expect(line.syllables == syllables, "'\(line.text)' has \(line.syllables) syllables")
+        }
+    }
+
     @Test func everyAssembledLineMatchesTheRequestedSyllableCount() {
         let spec = Fixtures.spec(syllables: 6, stress: "SwSwwS")
         let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: 6, seed: 7, poolTarget: 40)
@@ -23,19 +39,41 @@ import Domain
         }
     }
 
+    /// CPU time burned by the calling thread, which is what "how much work does this do"
+    /// actually means. Wall-clock keeps counting while the thread is descheduled, so it
+    /// measures how busy the machine was as much as how slow the code is.
+    private func threadCPUMilliseconds() -> Double {
+        var ts = timespec()
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)
+        return Double(ts.tv_sec) * 1_000 + Double(ts.tv_nsec) / 1_000_000
+    }
+
     @Test func generationStaysWellUnderTheLatencyBudget() {
         // poolTarget 60 matches what OfflineLyricProvider actually requests per call —
-        // the number the <100ms-on-A15 target is about. .serialized on this suite
-        // stops sibling tests' concurrent beam searches from stealing CPU mid-measurement.
+        // the number the <100ms-on-A15 target is about.
         let spec = Fixtures.spec(syllables: 7, stress: "SwSwwSw")
         _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: 0, poolTarget: 60)  // warm the index
 
-        let start = DispatchTime.now()
-        _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: 1, poolTarget: 60)
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+        // Thread CPU time, not wall-clock, because this test was measuring the wrong
+        // thing. Two runs of the identical binary came in at 156 ms and 827 ms; the
+        // difference was scheduling. `.serialized` only orders *this* suite's cases —
+        // `OfflineLyricProviderTests` runs in parallel, and in the slow run five of its
+        // cases (each a full beam search) were still in flight during the measurement.
+        // The assembler was not slower; it was sharing the cores. CPU time doesn't
+        // advance while the thread is off-core, so it reports the work done either way,
+        // and a genuine regression — more work per call — still raises it.
+        //
+        // Best of three on top, since cache state and page faults still vary a little
+        // and only ever add.
+        var bestMs = Double.greatestFiniteMagnitude
+        for seed in UInt64(1)...3 {
+            let start = threadCPUMilliseconds()
+            _ = Fixtures.assembler.assemble(spec: spec, syllableTarget: 7, seed: seed, poolTarget: 60)
+            bestMs = min(bestMs, threadCPUMilliseconds() - start)
+        }
         // Host Mac hardware and a debug build both run faster and slower than an A15 in
         // different ways; this ceiling gates gross regressions, not A15-exact timing.
-        #expect(elapsedMs < 300, "assembly took \(elapsedMs) ms")
+        #expect(bestMs < 300, "fastest of 3 assemblies used \(bestMs) ms of CPU")
     }
 
     @Test func wellAlignedStressBeatsMisalignedStress() {
@@ -98,6 +136,78 @@ import Domain
         }
     }
 
+    @Test("no candidate repeats the same word twice",
+          arguments: [3, 4, 5, 6, 7, 8, 9, 10, 12])
+    func candidatesNeverRepeatAWord(syllables: Int) {
+        // Regression: two POS slots of the same category in one template (the
+        // noun-"and"-noun frame is the reachable case) can beam-search their way to the
+        // same top-Zipf entry for both slots, producing self-duplicate lines like
+        // "night and night alone" that read as broken as any word-salad line.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: seed, poolTarget: 60)
+            for line in pool {
+                let words = line.text.split(separator: " ").map { String($0).lowercased() }
+                #expect(Set(words).count == words.count, "'\(line.text)' repeats a word")
+            }
+        }
+    }
+
+    @Test("determiner agreement: no 'a' before a vowel, no singular determiner before a plural",
+          arguments: [4, 5, 6, 7, 8])
+    func candidatesRespectDeterminerAgreement(syllables: Int) {
+        // Regression for "there's a arch clause" and "rely a knives" — both reachable
+        // because Moby's noun tags cover vowel-initial and plural forms alike.
+        let pattern = (0..<syllables).map { $0 % 2 == 0 ? "S" : "w" }.joined()
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: syllables, stress: pattern)
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: syllables, seed: seed, poolTarget: 60)
+            for line in pool {
+                let words = line.text.split(separator: " ").map { String($0).lowercased() }
+                for (word, next) in zip(words, words.dropFirst()) {
+                    if word == "a", let first = next.first {
+                        #expect(!"aeiou".contains(first), "'\(line.text)' has 'a' before a vowel")
+                    }
+                    if ["a", "an", "this", "that"].contains(word), next.hasSuffix("s"),
+                       let entry = Fixtures.store.lookup(next) {
+                        #expect(!entry.pos.contains(.pluralNoun),
+                                "'\(line.text)' pairs '\(word)' with plural '\(next)'")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func bareVerbSlotsRejectInflectedForms() {
+        // Regression for "I upgrading a bore" / "we'll escaped the goose": Moby tags
+        // participles and past forms as verbs, but every template subject and modal
+        // pairs with the base form. Multi-syllable -ing/-ed forms must not surface;
+        // monosyllables ("sing", "need") are genuine base verbs and stay.
+        var rng = SeededRandom(seed: 1)
+        let verbs = Fixtures.assembler.expansions(for: .pos(.verb), rng: &rng)
+        for entry in verbs where entry.syllables >= 2 {
+            #expect(!entry.text.hasSuffix("ing") && !entry.text.hasSuffix("ed"),
+                    "verb slot surfaced inflected form '\(entry.text)'")
+        }
+    }
+
+    @Test func contentWordsExcludeStopWordsEvenWhenTheLexiconMistagsThem() {
+        // Regression: `finalize()` used to add a word to `contentWords` from its raw
+        // lexicon POS bits alone, so a mistagged function word (the lexicon tags "a" as
+        // a noun — see contentSlotStopWords' doc comment) could satisfy "has a real
+        // content word" all by itself, defeating `isAcceptable`'s guard from the inside
+        // even though the word itself is filtered out of every content POS slot.
+        for seed in UInt64(0)..<8 {
+            let spec = Fixtures.spec(syllables: 5, stress: "SwSwS")
+            let pool = Fixtures.assembler.assemble(spec: spec, syllableTarget: 5, seed: seed, poolTarget: 60)
+            for line in pool {
+                #expect(line.contentWords.isDisjoint(with: PhraseAssembler.contentSlotStopWords),
+                        "'\(line.text)' counts a stop word as content: \(line.contentWords)")
+            }
+        }
+    }
+
     @Test func contentSlotsRejectHighFrequencyFunctionWords() {
         // The direct mechanism: expanding a noun slot must not surface "a"/"the",
         // even though the lexicon tags them as nouns and ranks them top by frequency.
@@ -107,6 +217,30 @@ import Domain
         #expect(!surfaced.contains("a"))
         #expect(!surfaced.contains("the"))
         #expect(!surfaced.contains("your"))
+        // Nor single letters (Moby tags "l" a noun) or profanity — never auto-suggested.
+        for text in surfaced {
+            #expect(text.count > 1, "noun slot surfaced single letter '\(text)'")
+            #expect(!PhraseAssembler.excludedContentWords.contains(text),
+                    "noun slot surfaced excluded word '\(text)'")
+        }
+    }
+
+    @Test func prepositionSlotsRejectArticlesAndSkipTheRandomReach() {
+        // Regression for "half a your cans" / "his eruption a this dye": Moby tags the
+        // articles as prepositions too, so a preposition slot could draw "a". And the
+        // beyond-the-head random reach — meant to surface evocative *content* words —
+        // was dredging up obscure prepositions ("sur", "atop", "fore"). A function-word
+        // slot must serve only the common head of its bucket, articles excluded.
+        var rngA = SeededRandom(seed: 1)
+        var rngB = SeededRandom(seed: 999)
+        let a = Fixtures.assembler.expansions(for: .pos(.preposition), rng: &rngA)
+        let b = Fixtures.assembler.expansions(for: .pos(.preposition), rng: &rngB)
+        for entry in a {
+            #expect(!entry.pos.contains(.article),
+                    "preposition slot surfaced the article-tagged '\(entry.text)'")
+        }
+        // No random reach: the expansion must be identical regardless of RNG state.
+        #expect(a.map(\.index) == b.map(\.index))
     }
 
     @Test func fastNoteConsonantClusterIsPenalized() {

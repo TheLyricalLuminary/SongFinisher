@@ -25,6 +25,7 @@ public enum PhraseDiscardReason: String, Sendable, Equatable, Codable {
 public enum AnalysisEvent: Sendable, Equatable {
     case pitch(PitchFrame)
     case tempoUpdated(TempoEstimate)
+    case chordUpdated(ChordEstimate)
     case phraseInProgress(start: TimeInterval, provisionalNotes: Int)
     case phraseCompleted(Phrase)
     case phraseDiscarded(PhraseDiscardReason)

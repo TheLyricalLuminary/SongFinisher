@@ -15,6 +15,7 @@ enum Fixtures {
 
     static let index = StressPatternIndex(store: store)
     static let assembler = PhraseAssembler(store: store, index: index)
+    static let offlineProvider = OfflineLyricProvider(store: store)
 
     static func spec(
         syllables: Int,
@@ -24,7 +25,8 @@ enum Fixtures {
         longSlots: [Int] = [],
         variationSeedText: String? = nil,
         emotionOverride: Emotion? = nil,
-        phraseID: UUID = UUID()
+        phraseID: UUID = UUID(),
+        chord: ChordEstimate? = nil
     ) -> PhraseSpec {
         let map = StressMap.parse(stress) ?? StressMap(pattern: Array(repeating: .weak, count: syllables))
         return PhraseSpec(
@@ -36,7 +38,8 @@ enum Fixtures {
             longNoteSlots: longSlots,
             phraseDuration: Double(syllables) * 0.4,
             requestedEmotionOverride: emotionOverride,
-            variationSeedText: variationSeedText
+            variationSeedText: variationSeedText,
+            chord: chord
         )
     }
 }

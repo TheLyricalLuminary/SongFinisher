@@ -14,7 +14,9 @@ import Domain
 /// onset/accent pocket. YIN and the tempo estimator keep running in both modes — the
 /// pitch frames feed the detector and the UI meters, and tempo tracks the flux envelope
 /// regardless of polyphony. Mode flips flush the outgoing segmenter first (its phrase,
-/// if any, is emitted before the `inputModeChanged` event).
+/// if any, is emitted before the `inputModeChanged` event). Chord detection runs
+/// independently of mode — harmony remains a useful signal for strummed input even
+/// while the pitch-based phrase path is inactive.
 ///
 /// Not Sendable by design.
 final class AnalysisChain {
@@ -25,6 +27,7 @@ final class AnalysisChain {
     private let pitchDetector = YINPitchDetector()
     private let onsetDetector = SpectralFluxOnsetDetector()
     private let tempoEstimator = TempoEstimator()
+    private let chordDetector = ChordDetector()
     private let noteSegmenter = NoteSegmenter()
     private let phraseSegmenter = PhraseSegmenter()
     private let polyphonyDetector = PolyphonyDetector()
@@ -71,6 +74,7 @@ final class AnalysisChain {
         pitchDetector.reset()
         onsetDetector.reset()
         tempoEstimator.reset()
+        chordDetector.reset()
         noteSegmenter.reset()
         phraseSegmenter.reset()
         polyphonyDetector.reset()
@@ -94,6 +98,14 @@ final class AnalysisChain {
         let energyOnset = onsetDetector.process(window: window)
         if let tempo = tempoEstimator.ingest(fluxValue: onsetDetector.latestFlux, time: time) {
             emit(.tempoUpdated(tempo))
+        }
+
+        // Only the tail hop is new since the previous (hopSize-shifted) window — the chord
+        // detector keeps its own longer history, so feeding the whole window would
+        // double-count the overlap. Chord detection runs regardless of mode: harmony is a
+        // useful signal even while strummed input is routed through the rhythm path.
+        if let chord = chordDetector.ingest(hopSamples: Array(window.suffix(Self.hopSize))) {
+            emit(.chordUpdated(chord))
         }
 
         if let newMode = polyphonyDetector.ingest(magnitudes: onsetDetector.latestMagnitudes, frame: frame) {

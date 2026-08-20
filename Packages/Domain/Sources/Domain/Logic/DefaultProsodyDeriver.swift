@@ -4,7 +4,9 @@ import Foundation
 /// into the `PhraseSpec` handed to the AI layer. Lives in Domain because it is pure — no
 /// frameworks, no I/O. Rhythm-only phrases (strummed chords) route through
 /// `RhythmProsodyDeriver`: the budget is the onset grid scaled by the singer's chosen
-/// density, and every pitch-derived quantity is skipped or defaulted.
+/// density, and every pitch-derived quantity is skipped or defaulted. Harmony (`chord`)
+/// only informs melodic phrases — a rhythm-only phrase already routed there because the
+/// input was polyphonic, which is exactly where chord detection is least reliable.
 public struct DefaultProsodyDeriver: ProsodyDeriving, Sendable {
     /// A note this much longer than the phrase median is a "long note" slot where the
     /// prompt asks for an open vowel (docs/ARCHITECTURE.md §9).
@@ -25,13 +27,19 @@ public struct DefaultProsodyDeriver: ProsodyDeriving, Sendable {
         return EmotionFeatureScorer.classify(features)
     }
 
-    public func spec(for phrase: Phrase, tempo: TempoEstimate?, memoryHints: SessionMemory, density: SyllableDensity) -> PhraseSpec {
+    public func spec(
+        for phrase: Phrase,
+        tempo: TempoEstimate?,
+        memoryHints: SessionMemory,
+        density: SyllableDensity,
+        chord: ChordEstimate?
+    ) -> PhraseSpec {
         phrase.isRhythmOnly
             ? rhythmSpec(for: phrase, tempo: tempo, density: density)
-            : melodicSpec(for: phrase, tempo: tempo)
+            : melodicSpec(for: phrase, tempo: tempo, chord: chord)
     }
 
-    private func melodicSpec(for phrase: Phrase, tempo: TempoEstimate?) -> PhraseSpec {
+    private func melodicSpec(for phrase: Phrase, tempo: TempoEstimate?, chord: ChordEstimate?) -> PhraseSpec {
         let budget = StressMapDeriver.deriveBudget(for: phrase, tempo: tempo)
         let notes = phrase.syllableBearingNotes
         let durationsMs = notes.map { Int(($0.duration * 1000).rounded()) }
@@ -45,16 +53,22 @@ public struct DefaultProsodyDeriver: ProsodyDeriving, Sendable {
             longSlots = notes.indices.filter { notes[$0].duration >= median * Self.longNoteRatio }
         }
 
+        let emotions = EmotionFeatureScorer.classify(
+            EmotionFeatureScorer.features(for: phrase, tempo: tempo),
+            chord: chord
+        )
+
         return PhraseSpec(
             phraseID: phrase.id,
             budget: budget,
-            emotions: emotions(for: phrase, tempo: tempo),
+            emotions: emotions,
             tempoBPM: tempo?.bpm ?? 0,
             tempoConfidence: tempo?.confidence ?? 0,
             contourShape: Self.contourShape(for: phrase),
             noteDurationsMs: durationsMs,
             longNoteSlots: longSlots,
-            phraseDuration: phrase.duration
+            phraseDuration: phrase.duration,
+            chord: chord
         )
     }
 

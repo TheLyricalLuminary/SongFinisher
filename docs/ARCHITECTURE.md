@@ -199,10 +199,12 @@ struct VoiceMemoAnalysis { let duration: TimeInterval; let tempo: TempoEstimate
 struct MemoSection { let label: String; let phraseIDs: [UUID] }
 
 enum SessionError: Error { case micPermissionDenied, audioEngineFailed(String),
-    noPitchDetected, tooNoisy, aiUnavailable(AIUnavailableReason), persistenceFailed }
-enum AIUnavailableReason { case offline, invalidKey, serverError,
-                                rateLimited(retryAfterSeconds: Int?) }
+    noPitchDetected, tooNoisy, persistenceFailed }
 ```
+
+There is deliberately no "AI unavailable" case. Both generators run on device, and the
+premium one falls back to the offline assembler internally rather than surfacing a
+failure, so a singer mid-take never sees an error banner because a guardrail balked.
 
 ## 5. Service interfaces (all in `Domain/Services`, Domain types only)
 
@@ -256,11 +258,13 @@ protocol PermissionChecking: Sendable {
     func currentMicPermission() async -> MicPermission   // undetermined/granted/denied
     func requestMicPermission() async -> MicPermission
 }
-protocol APIKeyProviding: Sendable { func anthropicKey() throws -> String }  // Keychain
-protocol HTTPPerforming: Sendable {                      // testability seam under Claude client
-    func perform(_ r: URLRequest) async throws -> (Data, HTTPURLResponse)
-}
 ```
+
+There is no API-key or HTTP seam. Both generators are on device, the app links no
+networking framework, and `ProviderKind` has no remote case — which is what lets
+`site/privacy.html` state that audio never leaves the device as a fact about the
+architecture rather than a promise about conduct. Adding either seam back would make
+that page false.
 
 Composition root: `AppServices` struct of protocol existentials, built once in
 `SongFinisherApp`, with a first-class `.fakes()` factory for tests and previews.
@@ -307,8 +311,7 @@ but a third-party dep for a few hundred rows), and JSON files (partial-write ris
 - `VersionedSchema` + empty `MigrationPlan` registered from day one.
 - Raw live audio is **never persisted** (privacy). Memo audio → `Application Support/Memos/`;
   memo analyses cached as Codable JSON keyed by file SHA-256 so re-imports are instant.
-- Anthropic API key → Keychain (`AfterFirstUnlockThisDeviceOnly`); BYO-key in MVP,
-  `APIKeyProviding` seam means a token-vending proxy later touches one file.
+- No credentials are stored, because there is no remote service to authenticate against.
 
 ## 8. Audio pipeline
 

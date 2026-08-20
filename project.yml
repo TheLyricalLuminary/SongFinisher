@@ -34,20 +34,58 @@ targets:
       - package: MelodyKit
       - package: LyricEngine
       - package: PersistenceKit
+      - target: SongFinisherWidgets
     info:
       path: SongFinisher/Info.plist
       properties:
         NSMicrophoneUsageDescription: >-
           Song Finisher listens to your melody on this device to suggest lyrics
           that fit it. Audio is analyzed locally and never stored.
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        # A phone is held; an iPad is propped on a stand next to the instrument, and a
+        # lyric sheet wants the wider measure. Landscape is allowed on iPad only — a
+        # phone rotating mid-take would reflow the sheet under the writer's eyes for no
+        # gain.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # A locked phone must not kill a take mid-hum: capture continues in the
+        # background and the Live Activity narrates it from the lock screen.
+        UIBackgroundModes: [audio]
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.songfinisher.app
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        DEVELOPMENT_TEAM: 473RT92HDB
+        CODE_SIGN_STYLE: Automatic
+
+  # The Live Activity host (lock screen + Dynamic Island). Compiles the shared
+  # SessionActivityAttributes so the app and the widget agree on the activity contract.
+  SongFinisherWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - SongFinisherWidgets
+      - path: Features/LiveActivity/SessionActivityAttributes.swift
+    info:
+      path: SongFinisherWidgets/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.songfinisher.app.widgets
+        # Must match the host app's family or the extension won't install on iPad.
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: false
         DEVELOPMENT_TEAM: 473RT92HDB
         CODE_SIGN_STYLE: Automatic
 
@@ -100,6 +138,10 @@ schemes:
     build:
       targets:
         SongFinisher: all
+    run:
+      # Local StoreKit testing: the paywall's three products resolve from this file
+      # in Xcode/simulator runs, no App Store Connect setup or paid account needed.
+      storeKitConfiguration: SongFinisher.storekit
     test:
       targets:
         - SongFinisherTests

@@ -103,4 +103,51 @@ import Foundation
         #expect(EmotionFeatureScorer.features(for: phrase, tempo: slow).tempoNormalized == 0.0)
         #expect(EmotionFeatureScorer.features(for: phrase, tempo: fast).tempoNormalized == 1.0)
     }
+
+    // MARK: - Chord bias (docs/ARCHITECTURE.md §8 companion: harmony as a bonus signal)
+
+    /// A feature vector with every shape-driven term zeroed out (flat contour, zero pitch
+    /// range/interval/density, no energy arc, no cadence) so any emotional lean in these
+    /// tests comes from the chord bias alone, not from the melody. It isn't perfectly
+    /// balanced — joy still edges out on tempo/bias terms alone — but that's exactly the
+    /// point: a reliable minor chord should be enough by itself to flip the top emotion
+    /// away from joy, the same way a reliable major chord reinforces it.
+    private static let neutralFeatures = EmotionFeatureVector(
+        tempoNormalized: 0.5, contourSlope: 0, pitchRangeSemitones: 0, meanIntervalSemitones: 0,
+        noteDensityPerSecond: 0, meanNoteDuration: 0.5, energyArc: 1.0, endsOnDescent: 0
+    )
+
+    @Test func reliableMajorChordTiltsTowardJoyOrHope() {
+        let chord = ChordEstimate(root: 0, quality: .major, confidence: 0.9)
+        let top = EmotionFeatureScorer.classify(Self.neutralFeatures, chord: chord).first!.emotion
+        #expect(top == .joy || top == .hope)
+    }
+
+    @Test func reliableMinorChordTiltsTowardMelancholyOrLongingOrReflection() {
+        let chord = ChordEstimate(root: 9, quality: .minor, confidence: 0.9)
+        let top = EmotionFeatureScorer.classify(Self.neutralFeatures, chord: chord).first!.emotion
+        #expect(top == .melancholy || top == .longing || top == .reflection)
+    }
+
+    @Test func unreliableChordDoesNotShiftTheDistribution() {
+        // Below `ChordEstimate.reliableConfidenceThreshold` — should be ignored entirely,
+        // producing the exact same distribution as passing no chord at all.
+        let chord = ChordEstimate(root: 9, quality: .minor, confidence: 0.1)
+        let withChord = EmotionFeatureScorer.classify(Self.neutralFeatures, chord: chord)
+        let withoutChord = EmotionFeatureScorer.classify(Self.neutralFeatures, chord: nil)
+        for (a, b) in zip(withChord, withoutChord) {
+            #expect(a.emotion == b.emotion)
+            #expect(abs(a.confidence - b.confidence) < 0.0001)
+        }
+    }
+
+    @Test func majorAndMinorChordsProduceDifferentDistributions() {
+        let major = ChordEstimate(root: 0, quality: .major, confidence: 0.9)
+        let minor = ChordEstimate(root: 0, quality: .minor, confidence: 0.9)
+        let majorScores = EmotionFeatureScorer.classify(Self.neutralFeatures, chord: major)
+        let minorScores = EmotionFeatureScorer.classify(Self.neutralFeatures, chord: minor)
+        let majorJoy = majorScores.first { $0.emotion == .joy }!.confidence
+        let minorJoy = minorScores.first { $0.emotion == .joy }!.confidence
+        #expect(majorJoy > minorJoy)
+    }
 }

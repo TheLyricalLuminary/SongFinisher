@@ -8,7 +8,8 @@ import Domain
 enum FoundationModelsPromptBuilder {
 
     /// Session-stable role and rules. Kept separate from the per-phrase prompt so the
-    /// runtime can treat it as trusted instructions (and cache it across turns).
+    /// runtime treats it as trusted instructions rather than as user input, and so
+    /// `ModelWarmer` can prewarm against exactly the instructions requests will use.
     static func instructions() -> String {
         """
         You are a lyric-writing collaborator inside a songwriting app. The singer just \

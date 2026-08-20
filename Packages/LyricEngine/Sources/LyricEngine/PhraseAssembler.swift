@@ -52,9 +52,64 @@ public struct PhraseAssembler: Sendable {
         "not", "no", "if", "there", "here", "such", "very", "too",
     ]
 
+    /// Never auto-suggested in a lyric line. Strictly profanity — emotionally dark
+    /// vocabulary ("sin", "curse", "damned") stays, since dark songs need it. Without
+    /// this, the valence-charged scoring below actively seeks these out for
+    /// negative-emotion phrases (VADER scores them strongly), and "i dimension a piss"
+    /// is not a suggestion; the songwriter can always type what they mean.
+    static let excludedContentWords: Set<String> = [
+        "piss", "pissed", "shit", "shitty", "fuck", "fucked", "fucking",
+        "cum", "cock", "dick", "tits", "whore", "slut", "bitch", "bitches",
+        "bastard", "asshole", "ass", "asses",
+    ]
+
+    /// Determiners that must not precede a plural noun (`isAcceptable`). Hoisted out of
+    /// the loop that uses it — an array literal there re-allocates per adjacent pair.
+    static let singularDeterminers: Set<String> = ["a", "an", "this", "that"]
+
+    /// Lexicon row numbers for `contentSlotStopWords`, and for those plus
+    /// `excludedContentWords` plus the single letters.
+    ///
+    /// These are membership tests in the beam search's innermost loop — roughly half a
+    /// million evaluations per `assemble` call — and `Set<String>.contains` there means
+    /// hashing a String every time, which an unoptimized build cannot inline away. Since
+    /// every entry the beam ever sees comes out of the store, its row number identifies
+    /// it just as well, so the sets are resolved to `Set<Int>` once here and the hot path
+    /// only ever compares integers. Words absent from the lexicon simply contribute no
+    /// row, which is the same outcome as never matching an entry's text.
+    private let stopWordIDs: Set<Int>
+    private let blockedContentIDs: Set<Int>
+
     public init(store: LexiconStore, index: StressPatternIndex) {
         self.store = store
         self.index = index
+
+        let stopIDs = Set(Self.contentSlotStopWords.compactMap { store.lookup($0)?.index })
+        var blocked = stopIDs
+        blocked.formUnion(Self.excludedContentWords.compactMap { store.lookup($0)?.index })
+        // Moby tags the single letters as nouns ("l" the letter) and they read as typos
+        // in a lyric. One pass over the word table costs a few milliseconds at load and
+        // is exact, where enumerating a…z would assume what a single-character row can be.
+        for i in 0..<store.count where store.wordText(at: i).count == 1 {
+            blocked.insert(i)
+        }
+        self.stopWordIDs = stopIDs
+        self.blockedContentIDs = blocked
+    }
+
+    /// The subset of this emotion's trigger words that may actually take a content slot,
+    /// as lexicon row numbers. Resolved once per `assemble` call so `positionScore` can
+    /// collapse three checks (curated / content-word / not-a-stop-word) into one integer
+    /// set lookup in its innermost loop.
+    private func triggerWordIDs(for emotion: Emotion) -> Set<Int> {
+        var ids = Set<Int>()
+        for word in TriggerWordBank.words(for: emotion) {
+            guard let entry = store.lookup(word),
+                  !entry.pos.isDisjoint(with: .contentWord),
+                  !stopWordIDs.contains(entry.index) else { continue }
+            ids.insert(entry.index)
+        }
+        return ids
     }
 
     /// A slot category is "content" when it carries lexical stress and meaning
@@ -63,13 +118,29 @@ public struct PhraseAssembler: Sendable {
         !category.isDisjoint(with: .contentWord)
     }
 
-    /// A finished line is only offered if it carries at least one real content word and
-    /// does not end on a bare function word. A line ending on "a" or "your" reads as
-    /// broken no matter how well its stress aligns.
-    static func isAcceptable(_ line: AssembledLine) -> Bool {
+    /// A finished line is only offered if it carries at least one real content word,
+    /// does not end on a bare function word, and never repeats the same word twice —
+    /// two POS slots of the same category in one template (e.g. the noun-and-noun
+    /// frame) can otherwise beam-search their way to the same top-Zipf entry for both
+    /// slots ("night and night alone"), which reads as broken as any word salad.
+    /// Adjacent-pair grammar is also enforced: "a" never precedes a vowel-initial
+    /// word ("a arch clause") and a singular determiner never precedes a plural
+    /// ("rely a knives") — both reachable because Moby's noun tags cover plurals.
+    func isAcceptable(_ line: AssembledLine) -> Bool {
         guard !line.contentWords.isEmpty else { return false }
-        guard let last = line.text.split(separator: " ").last else { return false }
-        return !contentSlotStopWords.contains(String(last).lowercased())
+        let words = line.text.split(separator: " ").map { String($0).lowercased() }
+        guard let last = words.last else { return false }
+        guard !Self.contentSlotStopWords.contains(last) else { return false }
+        guard Set(words).count == words.count else { return false }
+
+        for (word, next) in zip(words, words.dropFirst()) {
+            if word == "a", let first = next.first, "aeiou".contains(first) { return false }
+            if Self.singularDeterminers.contains(word), next.hasSuffix("s"),
+               let entry = store.lookup(next), entry.pos.contains(.pluralNoun) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Generates a pool of scored lines for `syllableTarget` syllables against the
@@ -83,6 +154,8 @@ public struct PhraseAssembler: Sendable {
         let pattern = padded(spec.budget.stressMap.pattern, to: syllableTarget)
         let longSlots = Set(spec.longNoteSlots)
         let targetValence = Self.targetValence(for: spec)
+        let emotion = spec.requestedEmotionOverride ?? spec.topEmotions.first?.emotion ?? .reflection
+        let triggerWords = triggerWordIDs(for: emotion)
 
         var rng = SeededRandom(seed: seed)
         var templates = TemplateBank.all.filter {
@@ -101,9 +174,10 @@ public struct PhraseAssembler: Sendable {
                 longSlots: longSlots,
                 durations: spec.noteDurationsMs,
                 targetValence: targetValence,
+                triggerWords: triggerWords,
                 rng: &rng
             )
-            for line in lines where Self.isAcceptable(line) && seenTexts.insert(line.text).inserted {
+            for line in lines where isAcceptable(line) && seenTexts.insert(line.text).inserted {
                 pool.append(line)
             }
         }
@@ -125,6 +199,7 @@ public struct PhraseAssembler: Sendable {
         longSlots: Set<Int>,
         durations: [Int],
         targetValence: Double,
+        triggerWords: Set<Int> = [],
         rng: inout SeededRandom
     ) -> [AssembledLine] {
         let n = pattern.count
@@ -150,6 +225,7 @@ public struct PhraseAssembler: Sendable {
                         pattern: pattern,
                         longSlots: longSlots,
                         durations: durations,
+                        triggerWords: triggerWords,
                         rng: &rng
                     )
                     var advanced = state
@@ -182,13 +258,31 @@ public struct PhraseAssembler: Sendable {
         case .oneOf(let literals):
             return literals.compactMap(resolveLiteral)
         case .pos(let category):
-            let filterStopWords = Self.isContentCategory(category)
+            let isContent = Self.isContentCategory(category)
+            // The beyond-the-head random reach exists to surface evocative mid-frequency
+            // *content* vocabulary. For function-word slots (preposition, conjunction)
+            // it instead dredges up "sur"/"atop"/"fore"-grade obscurities that wreck a
+            // line's fluency — there, only the common head of the bucket is wanted.
+            let reach = isContent ? Self.extraReach : 0
             var out: [LexiconStore.Entry] = []
             for syllables in 1...4 {
-                let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: Self.extraReach, rng: &rng)
+                let ids = index.topCandidates(syllables: syllables, pos: category, limit: Self.candidatesPerSlot, extraRandom: reach, rng: &rng)
                 for id in ids {
                     let entry = store[Int(id)]
-                    if filterStopWords, Self.contentSlotStopWords.contains(entry.text) { continue }
+                    // Function words, single letters, and profanity all disqualify an
+                    // entry from a content slot, so they share one precomputed row set.
+                    if isContent, blockedContentIDs.contains(entry.index) { continue }
+                    // Moby also tags the articles as prepositions, so without this a
+                    // preposition slot happily takes "a" — "half a your cans". An
+                    // article-tagged word never belongs in a non-article POS slot.
+                    if !category.contains(.article), entry.pos.contains(.article) { continue }
+                    // Bare-verb slots: Moby tags participles and past forms as verbs
+                    // too, but every template subject and modal pairs with the base
+                    // form — "I upgrading a bore", "we'll escaped the goose". Multi-
+                    // syllable verbs ending -ing/-ed are inflected forms; the
+                    // monosyllables ("sing", "need") are genuine base verbs.
+                    if category.contains(.verb), entry.syllables >= 2,
+                       entry.text.hasSuffix("ing") || entry.text.hasSuffix("ed") { continue }
                     out.append(entry)
                 }
             }
@@ -242,6 +336,7 @@ public struct PhraseAssembler: Sendable {
         pattern: [Stress],
         longSlots: Set<Int>,
         durations: [Int],
+        triggerWords: Set<Int> = [],
         rng: inout SeededRandom
     ) -> Double {
         var score = 0.0
@@ -272,6 +367,24 @@ public struct PhraseAssembler: Sendable {
         // raw commonness — the source of generic, cliché word choices. Plus a whisper
         // of seeded jitter for tie-break variety.
         score += max(0, 0.3 - abs(entry.zipf - Self.evocativePeak) * 0.15)
+        // Mid-frequency alone isn't evocative — "gram" and "flux" sit in the same
+        // Zipf band as "thrill" and "grace". The VADER valence already in the lexicon
+        // separates them: emotionally charged content words get a modest boost, so
+        // lines lean on words that carry feeling rather than merely fitting meter.
+        // Direction (positive/negative) is still handled by the line-level emotion
+        // score; magnitude alone is rewarded here.
+        if !entry.pos.isDisjoint(with: .contentWord) {
+            score += min(0.25, abs(entry.valence) * 0.15)
+        }
+        // Curated beats statistical: content words from the book's Trigger Word
+        // Library for the phrase's emotional state ("The Song Finisher", Emotional
+        // State Engineering) get a lexical bonus on top of the valence term. Kept
+        // below the stress-fit weights so the meter still rules. The content-word and
+        // not-a-stop-word conditions are already baked into `triggerWordIDs`, so a
+        // trigger word's fringe POS tag still can't drag it into the wrong slot.
+        if triggerWords.contains(entry.index) {
+            score += 0.25
+        }
         score += Double(rng.next() % 100) / 2000.0
         return score
     }
@@ -284,7 +397,11 @@ public struct PhraseAssembler: Sendable {
         var zipfSum = 0.0
 
         for entry in state.entries {
-            let isContent = !entry.pos.isDisjoint(with: .contentWord)
+            // Raw lexicon POS bits alone aren't trustworthy here: the same mistagging
+            // that made "a" rank as a noun (see contentSlotStopWords' doc comment) would
+            // otherwise let a bare function word count as the line's one required
+            // "real content" word, defeating the isAcceptable guard from the inside.
+            let isContent = !entry.pos.isDisjoint(with: .contentWord) && !stopWordIDs.contains(entry.index)
             for j in 0..<entry.syllables {
                 stressPattern.append(entry.isStressed(syllable: j) ? .strong : .weak)
             }
